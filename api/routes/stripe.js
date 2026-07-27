@@ -41,10 +41,10 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
         items: [{ price: priceId }],
         payment_behavior: 'default_incomplete',
         payment_settings: { save_default_payment_method: 'on_subscription' },
-        expand: ['latest_invoice.payment_intent'],
+        expand: ['latest_invoice.confirmation_secret'],
     });
 
-    const clientSecret = subscription.latest_invoice.payment_intent.client_secret;
+    const clientSecret = subscription.latest_invoice.confirmation_secret.client_secret;
 
     return res.status(200).json({
         success: true,
