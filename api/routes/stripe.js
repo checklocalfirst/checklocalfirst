@@ -15,8 +15,8 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
     const { name, description, address, email, phone, state, city, zip, firstname, lastname, business_tier } = req.validated.body;
 
     const priceId = business_tier === 'premium'
-        ? process.env.STRIPE_PRICE_PREMIUM_BUSINESS
-        : process.env.STRIPE_PRICE_BASIC_BUSINESS;
+        ? process.env.STRIPE_PREMIUM_BUSINESS_PRICE
+        : process.env.STRIPE_BASIC_BUSINESS_PRICE;
 
     const customer = await stripe.customers.create({
         email: email,
