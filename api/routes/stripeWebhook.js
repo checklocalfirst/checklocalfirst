@@ -37,9 +37,10 @@ router.post('/', express.raw({ type: 'application/json' }), catchAsync(async (re
         const metadata = customer.metadata;
 
         if (metadata.signup_type === 'business') {
-            // Re-fetch the invoice with expand to reliably get the subscription reference
+            // Expand only up to subscription_details — NOT .subscription itself,
+            // so the subscription field stays a plain ID string, not the full object
             const invoice = await stripe.invoices.retrieve(invoiceObject.id, {
-                expand: ['parent.subscription_details.subscription']
+                expand: ['parent.subscription_details']
             });
 
             const subscriptionId = invoice.parent?.subscription_details?.subscription;
