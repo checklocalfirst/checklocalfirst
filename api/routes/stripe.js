@@ -14,6 +14,16 @@ router.get('/', catchAsync(async (req, res) => {
 router.post('/signup/business/checkout', validate(businessCheckoutSchema), catchAsync(async (req, res) => {
     const { name, description, address, email, phone, state, city, zip, firstname, lastname, business_tier } = req.validated.body;
 
+    const { data: existingUser } = await supabaseAdmin
+        .from('users')
+        .select('user_id')
+        .eq('email', email)
+        .single();
+
+    if (existingUser) {
+        throw new AppError('An account with this email already exists', 409);
+    }
+
     const priceId = business_tier === 'premium'
         ? process.env.STRIPE_PREMIUM_BUSINESS_PRICE
         : process.env.STRIPE_BASIC_BUSINESS_PRICE;
