@@ -1,9 +1,9 @@
-// routes/stripeWebhook.js
 import express from 'express';
 import { stripe } from '../stripeconnect.js';
 import { supabaseAdmin } from '../dbconnect.js';
 import { AppError } from '../helpers/AppError.js';
 import { catchAsync } from '../helpers/catchAsync.js';
+import crypto from 'crypto';
 
 const router = express.Router();
 
@@ -18,8 +18,8 @@ router.post('/', express.raw({ type: 'application/json' }), catchAsync(async (re
     }
 
     if (event.type === 'invoice.payment_succeeded') {
-        const invoice = event.data.object;
-        const customerId = invoice.customer;
+        const invoiceObject = event.data.object;
+        const customerId = invoiceObject.customer;
 
         // Idempotency check — has this customer already been turned into a business?
         const { data: existingBusiness } = await supabaseAdmin
@@ -37,7 +37,12 @@ router.post('/', express.raw({ type: 'application/json' }), catchAsync(async (re
         const metadata = customer.metadata;
 
         if (metadata.signup_type === 'business') {
-            const subscriptionId = invoice.subscription;
+            // Re-fetch the invoice with expand to reliably get the subscription reference
+            const invoice = await stripe.invoices.retrieve(invoiceObject.id, {
+                expand: ['parent.subscription_details.subscription']
+            });
+
+            const subscriptionId = invoice.parent?.subscription_details?.subscription;
 
             const randomPassword = crypto.randomUUID() + crypto.randomUUID();
 
