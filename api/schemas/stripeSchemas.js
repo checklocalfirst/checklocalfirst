@@ -18,3 +18,10 @@ export const businessCheckoutSchema = z.object({
   params: z.object({}).optional(),
   query: z.object({}).optional(),
 });
+
+// schemas/stripeSchemas.js — add this
+export const premiumUserCheckoutSchema = z.object({
+  body: z.object({}).optional(),
+  params: z.object({}).optional(),
+  query: z.object({}).optional(),
+});
