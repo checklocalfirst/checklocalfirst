@@ -92,6 +92,13 @@ router.get('/signup/business/recovery-link', validate(recoveryLinkQuerySchema), 
     const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
         type: 'recovery',
         email: business.email,
+        options: {
+            // Without this, Supabase falls back to whatever "Site URL" is configured in the
+            // dashboard (Authentication -> URL Configuration) — which is what silently sent
+            // the last test to a blank localhost tab. This must also be added to that project's
+            // Redirect URLs allow-list, or Supabase ignores redirectTo and falls back anyway.
+            redirectTo: process.env.RESET_PASSWORD_URL,
+        },
     });
 
     if (linkError) {
