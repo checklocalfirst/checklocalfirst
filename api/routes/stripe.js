@@ -5,6 +5,7 @@ import { businessCheckoutSchema } from '../schemas/stripeSchemas.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
 import { supabaseAdmin } from "../dbconnect.js";
+import { authMiddleware } from "../middleware/auth.js";
 
 const router = express.Router();
 
