@@ -31,3 +31,11 @@ export const premiumUserCancelSchema = z.object({
   params: z.object({}).optional(),
   query: z.object({}).optional(),
 });
+
+export const recoveryLinkQuerySchema = z.object({
+  body: z.object({}).optional(),
+  params: z.object({}).optional(),
+  query: z.object({
+    customer_id: z.string().min(1, 'customer_id is required'),
+  }),
+});
