@@ -33,6 +33,29 @@ router.post('/', express.raw({ type: 'application/json' }), catchAsync(async (re
                 .single();
 
             if (existingBusiness) {
+                // Not a new signup — this is a renewal or a tier-upgrade proration invoice.
+                if (invoiceObject.billing_reason === 'subscription_update') {
+                    const invoice = await stripe.invoices.retrieve(invoiceObject.id, {
+                        expand: ['parent.subscription_details']
+                    });
+                    const subscriptionId = invoice.parent?.subscription_details?.subscription;
+
+                    if (subscriptionId) {
+                        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+                        const priceId = subscription.items.data[0]?.price?.id;
+                        const newTier = priceId === process.env.STRIPE_PREMIUM_BUSINESS_PRICE ? 'premium' : 'basic';
+
+                        const { error: tierError } = await supabaseAdmin
+                            .from('businesses')
+                            .update({ business_tier: newTier })
+                            .eq('id', existingBusiness.id);
+
+                        if (tierError) {
+                            throw new AppError(tierError.message, 500);
+                        }
+                    }
+                }
+
                 return res.status(200).json({ received: true });
             }
 
@@ -127,6 +150,51 @@ router.post('/', express.raw({ type: 'application/json' }), catchAsync(async (re
                 throw new AppError(updateError.message, 500);
             }
         }
+    }
+
+    // Fires when a subscription actually ends — either an immediate cancellation or,
+    // more commonly here, once a cancel_at_period_end subscription reaches its period end.
+    if (event.type === 'customer.subscription.deleted') {
+        const subscription = event.data.object;
+        const customerId = subscription.customer;
+
+        const { data: business } = await supabaseAdmin
+            .from('businesses')
+            .select('id')
+            .eq('stripe_customer_id', customerId)
+            .single();
+
+        if (business) {
+            const { error: suspendError } = await supabaseAdmin
+                .from('businesses')
+                .update({ status: 'suspended' })
+                .eq('id', business.id);
+
+            if (suspendError) {
+                throw new AppError(suspendError.message, 500);
+            }
+
+            return res.status(200).json({ received: true });
+        }
+
+        const { data: user } = await supabaseAdmin
+            .from('users')
+            .select('user_id')
+            .eq('stripe_customer_id', customerId)
+            .single();
+
+        if (user) {
+            const { error: downgradeError } = await supabaseAdmin
+                .from('users')
+                .update({ is_premium: false })
+                .eq('user_id', user.user_id);
+
+            if (downgradeError) {
+                throw new AppError(downgradeError.message, 500);
+            }
+        }
+
+        return res.status(200).json({ received: true });
     }
 
     return res.status(200).json({ received: true });

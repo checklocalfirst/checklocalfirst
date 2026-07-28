@@ -5,7 +5,7 @@ import { AppError } from './AppError.js';
 export async function verifyBusinessOwnership(slug, userId) {
     const { data: businessData, error: businessError } = await supabaseAdmin
         .from('businesses')
-        .select('owner_user_id, id')
+        .select('owner_user_id, id, business_tier, stripe_subscription_id, is_comped')
         .eq('slug', slug)
         .single();
 

@@ -1,11 +1,13 @@
 import { stripe } from "../stripeconnect.js";
 import express from 'express'
 import { validate } from '../middleware/validate.js';
-import { businessCheckoutSchema, premiumUserCheckoutSchema } from '../schemas/stripeSchemas.js';
+import { businessCheckoutSchema, premiumUserCheckoutSchema, premiumUserCancelSchema } from '../schemas/stripeSchemas.js';
+import { businessSlugParamSchema } from '../schemas/businessSchemas.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
 import { supabaseAdmin } from "../dbconnect.js";
 import { authMiddleware } from "../middleware/auth.js";
+import { verifyBusinessOwnership } from '../helpers/verifyBusinessOwnership.js';
 
 const router = express.Router();
 
@@ -116,5 +118,114 @@ router.post('/premium-user/checkout', authMiddleware, validate(premiumUserChecko
         }
     });
 }))
+
+// Basic -> Premium business tier upgrade. Charges the prorated difference immediately
+// against the subscription's saved payment method. business_tier itself is NOT flipped
+// here — the webhook (invoice.payment_succeeded, billing_reason 'subscription_update')
+// is the source of truth, same pattern as signup. This route just tells Stripe to make
+// the change and reports whether the charge went through.
+router.post('/business/:slug/upgrade', authMiddleware, validate(businessSlugParamSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+
+    const business = await verifyBusinessOwnership(slug, req.user.id);
+
+    if (business.business_tier === 'premium') {
+        throw new AppError('Business is already on the Premium tier', 409);
+    }
+
+    if (business.is_comped) {
+        throw new AppError('Comped accounts must start billing before upgrading tiers', 400);
+    }
+
+    if (!business.stripe_subscription_id) {
+        throw new AppError('No active subscription found for this business', 400);
+    }
+
+    const subscription = await stripe.subscriptions.retrieve(business.stripe_subscription_id);
+    const subscriptionItemId = subscription.items.data[0].id;
+
+    try {
+        // error_if_incomplete: if the immediate proration charge fails or needs 3DS,
+        // Stripe throws here and does NOT apply the price change — no rollback needed.
+        await stripe.subscriptions.update(business.stripe_subscription_id, {
+            items: [{ id: subscriptionItemId, price: process.env.STRIPE_PREMIUM_BUSINESS_PRICE }],
+            proration_behavior: 'always_invoice',
+            payment_behavior: 'error_if_incomplete',
+        });
+    } catch (err) {
+        if (err.type === 'StripeCardError') {
+            throw new AppError(`Upgrade payment failed: ${err.message}`, 402);
+        }
+        throw new AppError(err.message, 500);
+    }
+
+    return res.status(200).json({
+        success: true,
+        message: 'Upgrade payment confirmed — Premium tier will be reflected shortly',
+    });
+}));
+
+// Cancels at the end of the current billing period (not immediately) so the business
+// keeps its current tier/access until the period they already paid for runs out.
+// The webhook (customer.subscription.deleted) sets status: 'suspended' once it actually lapses.
+router.post('/business/:slug/cancel', authMiddleware, validate(businessSlugParamSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+
+    const business = await verifyBusinessOwnership(slug, req.user.id);
+
+    if (business.is_comped) {
+        throw new AppError('Comped accounts do not have a billed subscription to cancel', 400);
+    }
+
+    if (!business.stripe_subscription_id) {
+        throw new AppError('No active subscription found for this business', 400);
+    }
+
+    const subscription = await stripe.subscriptions.update(business.stripe_subscription_id, {
+        cancel_at_period_end: true,
+    });
+
+    return res.status(200).json({
+        success: true,
+        message: 'Subscription will cancel at the end of the current billing period',
+        data: { cancel_at: new Date(subscription.cancel_at * 1000).toISOString() },
+    });
+}));
+
+// Same cancel-at-period-end pattern for premium users. Webhook flips is_premium: false
+// once the subscription actually ends.
+router.post('/premium-user/cancel', authMiddleware, validate(premiumUserCancelSchema), catchAsync(async (req, res) => {
+    const { data: user, error } = await supabaseAdmin
+        .from('users')
+        .select('is_premium, is_comped, stripe_subscription_id')
+        .eq('user_id', req.user.id)
+        .single();
+
+    if (error || !user) {
+        throw new AppError('User not found', 404);
+    }
+
+    if (!user.is_premium) {
+        throw new AppError('You do not have an active premium subscription', 400);
+    }
+
+    if (user.is_comped) {
+        throw new AppError('Comped accounts do not have a billed subscription to cancel', 400);
+    }
+
+    if (!user.stripe_subscription_id) {
+        throw new AppError('No active subscription found', 400);
+    }
+
+    const subscription = await stripe.subscriptions.update(user.stripe_subscription_id, {
+        cancel_at_period_end: true,
+    });
+
+    return res.status(200).json({
+        success: true,
+        message: 'Premium will cancel at the end of the current billing period',
+        data: { cancel_at: new Date(subscription.cancel_at * 1000).toISOString() },
+    });
+}));
 
 export default router
