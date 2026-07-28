@@ -1,7 +1,7 @@
 import { stripe } from "../stripeconnect.js";
 import express from 'express'
 import { validate } from '../middleware/validate.js';
-import { businessCheckoutSchema } from '../schemas/stripeSchemas.js';
+import { businessCheckoutSchema, premiumUserCheckoutSchema } from '../schemas/stripeSchemas.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
 import { supabaseAdmin } from "../dbconnect.js";
