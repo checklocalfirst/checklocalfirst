@@ -154,6 +154,14 @@ router.post('/business/:slug/upgrade', authMiddleware, validate(businessSlugPara
     const subscription = await stripe.subscriptions.retrieve(business.stripe_subscription_id);
     const subscriptionItemId = subscription.items.data[0].id;
 
+    // business_tier in the DB lags Stripe until the webhook lands, so a second request that
+    // sneaks in before that flip would still see 'basic' above and slip past that first check.
+    // Checking Stripe's actual current price closes that gap: if a prior request already
+    // completed the price change on Stripe's side, this request stops before charging again.
+    if (subscription.items.data[0].price.id === process.env.STRIPE_PREMIUM_BUSINESS_PRICE) {
+        throw new AppError('Business is already on the Premium tier', 409);
+    }
+
     try {
         // error_if_incomplete: if the immediate proration charge fails or needs 3DS,
         // Stripe throws here and does NOT apply the price change — no rollback needed.
