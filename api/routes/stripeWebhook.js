@@ -4,6 +4,7 @@ import { supabaseAdmin } from '../dbconnect.js';
 import { AppError } from '../helpers/AppError.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import crypto from 'crypto';
+import { authMiddleware } from '../middleware/auth.js';
 
 const router = express.Router();
 
