@@ -1,7 +1,7 @@
 import { stripe } from "../stripeconnect.js";
 import express from 'express'
 import { validate } from '../middleware/validate.js';
-import { businessCheckoutSchema, premiumUserCheckoutSchema, premiumUserCancelSchema, recoveryLinkQuerySchema } from '../schemas/stripeSchemas.js';
+import { businessCheckoutSchema, premiumUserCheckoutSchema, premiumUserCancelSchema } from '../schemas/stripeSchemas.js';
 import { businessSlugParamSchema } from '../schemas/businessSchemas.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
@@ -26,6 +26,16 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
 
     if (existingUser) {
         throw new AppError('An account with this email already exists', 409);
+    }
+
+    const { data: existingPhone } = await supabaseAdmin
+        .from('businesses')
+        .select('id')
+        .eq('phone', phone)
+        .single();
+
+    if (existingPhone) {
+        throw new AppError('An account with this phone number already exists', 409);
     }
 
     const priceId = business_tier === 'premium'
@@ -68,48 +78,6 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
         }
     });
 }))
-
-// No auth possible here — the Supabase Auth user doesn't exist (and there's no token to issue)
-// until the webhook creates it. Trust boundary is the Stripe customer_id itself: it's an
-// opaque, non-sequential ID only the checkout response ever revealed to this specific caller.
-// Poll this after payment confirms. Returns { ready: false } until the webhook has created the
-// business row; once it has, generates a fresh single-use Supabase recovery link so the owner
-// can set their own password instead of the random one the webhook assigned. This is a stand-in
-// for emailing that link once Resend/DNS is live — same underlying Supabase mechanism either way.
-router.get('/signup/business/recovery-link', validate(recoveryLinkQuerySchema), catchAsync(async (req, res) => {
-    const { customer_id } = req.validated.query;
-
-    const { data: business } = await supabaseAdmin
-        .from('businesses')
-        .select('email')
-        .eq('stripe_customer_id', customer_id)
-        .single();
-
-    if (!business) {
-        return res.status(200).json({ success: true, data: { ready: false } });
-    }
-
-    const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
-        type: 'recovery',
-        email: business.email,
-        options: {
-            // Without this, Supabase falls back to whatever "Site URL" is configured in the
-            // dashboard (Authentication -> URL Configuration) — which is what silently sent
-            // the last test to a blank localhost tab. This must also be added to that project's
-            // Redirect URLs allow-list, or Supabase ignores redirectTo and falls back anyway.
-            redirectTo: process.env.RESET_PASSWORD_URL,
-        },
-    });
-
-    if (linkError) {
-        throw new AppError(linkError.message, 500);
-    }
-
-    return res.status(200).json({
-        success: true,
-        data: { ready: true, recovery_link: linkData.properties.action_link },
-    });
-}));
 
 // routes/stripe.js — add this route
 router.post('/premium-user/checkout', authMiddleware, validate(premiumUserCheckoutSchema), catchAsync(async (req, res) => {
