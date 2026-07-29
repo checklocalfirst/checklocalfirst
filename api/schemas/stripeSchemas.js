@@ -14,6 +14,7 @@ export const businessCheckoutSchema = z.object({
     firstname: z.string().min(1).max(100),
     lastname: z.string().min(1).max(100),
     business_tier: z.enum(['basic', 'premium']),
+    coupon_code: z.string().min(1).optional(),
   }),
   params: z.object({}).optional(),
   query: z.object({}).optional(),

@@ -16,7 +16,7 @@ router.get('/', catchAsync(async (req, res) => {
 }))
 
 router.post('/signup/business/checkout', validate(businessCheckoutSchema), catchAsync(async (req, res) => {
-    const { name, description, address, email, phone, state, city, zip, firstname, lastname, business_tier } = req.validated.body;
+    const { name, description, address, email, phone, state, city, zip, firstname, lastname, business_tier, coupon_code } = req.validated.body;
 
     const { data: existingUser } = await supabaseAdmin
         .from('users')
@@ -36,6 +36,20 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
 
     if (existingPhone) {
         throw new AppError('An account with this phone number already exists', 409);
+    }
+
+    // Customer-facing codes are Stripe Promotion Codes (e.g. "FRIENDS3"), not raw Coupon IDs —
+    // resolve the typed code to its promotion code object before it's ever used, so a bad code
+    // fails clearly here instead of surfacing as a confusing error from subscription creation.
+    let promotionCodeId;
+    if (coupon_code) {
+        const promotionCodes = await stripe.promotionCodes.list({ code: coupon_code, active: true, limit: 1 });
+
+        if (promotionCodes.data.length === 0) {
+            throw new AppError('Invalid or expired coupon code', 400);
+        }
+
+        promotionCodeId = promotionCodes.data[0].id;
     }
 
     const priceId = business_tier === 'premium'
@@ -66,6 +80,7 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
         payment_behavior: 'default_incomplete',
         payment_settings: { save_default_payment_method: 'on_subscription' },
         expand: ['latest_invoice.confirmation_secret'],
+        ...(promotionCodeId ? { discounts: [{ promotion_code: promotionCodeId }] } : {}),
     });
 
     const clientSecret = subscription.latest_invoice.confirmation_secret.client_secret;
@@ -75,6 +90,7 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
         data: {
             client_secret: clientSecret,
             customer_id: customer.id,
+            discount_applied: Boolean(promotionCodeId),
         }
     });
 }))
