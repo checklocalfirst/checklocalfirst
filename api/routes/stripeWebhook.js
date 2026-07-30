@@ -5,6 +5,7 @@ import { AppError } from '../helpers/AppError.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import crypto from 'crypto';
 import { authMiddleware } from '../middleware/auth.js';
+import { sendEmail } from '../helpers/sendEmail.js';
 
 const router = express.Router();
 
@@ -111,6 +112,40 @@ router.post('/', express.raw({ type: 'application/json' }), catchAsync(async (re
 
             if (businessError) {
                 throw new AppError(businessError.message, 500);
+            }
+
+            // createUser above sets a random password nobody knows — this is the only way
+            // the business owner gets into the account they just paid for. Wrapped in its own
+            // try/catch so a Resend hiccup doesn't fail this webhook response: the account and
+            // business rows already committed above, and failing here would just make Stripe
+            // retry the whole event, which lands in the existingBusiness branch above and never
+            // re-attempts this email. If sending fails, it's logged here for manual follow-up
+            // instead of silently vanishing.
+            try {
+                const { data: linkData, error: linkError } = await supabaseAdmin.auth.admin.generateLink({
+                    type: 'recovery',
+                    email: customer.email,
+                    options: {
+                        redirectTo: process.env.PASSWORD_RESET_REDIRECT_URL
+                    }
+                });
+
+                if (linkError) {
+                    throw linkError;
+                }
+
+                await sendEmail({
+                    to: customer.email,
+                    subject: 'Welcome to CheckLocalFirst — set up your account',
+                    html: `
+                        <p>Hi ${metadata.owner_firstname},</p>
+                        <p>Thanks for signing up ${metadata.business_name} with CheckLocalFirst! Click below to set your password and access your business dashboard.</p>
+                        <p><a href="${linkData.properties.action_link}">Set your password</a></p>
+                        <p>This link will expire after a while, so set your password soon. If you weren't expecting this email, you can safely ignore it.</p>
+                    `
+                });
+            } catch (emailErr) {
+                console.error(`Failed to send password-setup email to ${customer.email}:`, emailErr);
             }
         }
 
