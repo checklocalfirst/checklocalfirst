@@ -65,7 +65,7 @@ Migration 011 already did the hard part — the columns and constraints exist. W
 
 ## Phase 8 — Security & production hardening
 
-- **RLS**: flagged in your own readme as not yet done. Since every private route already goes through `supabaseAdmin` (service role) and the anon key is only used for scoped auth calls, RLS shouldn't break existing routes — but test table-by-table before flipping it on in production.
+- **RLS**: enabled (Aug 1, 2026). Since every private route already goes through `supabaseAdmin` (service role), this was low-risk to flip on — worth double-checking the public routes (`businesses.js`, `search.js`, `services.js`, `categories.js`) that use the anon `supabase` client still return the expected rows now that policies are enforced at the DB level.
 - Audit for hardcoded values (also your own readme's note).
 - Confirm Stripe price IDs, webhook secret, and the new Resend key all live only in env.
 - Add basic request logging/monitoring since Render is your sole host.
@@ -81,3 +81,6 @@ Migration 011 already did the hard part — the columns and constraints exist. W
 5. **Phase 4** — photo upload (this one has a real new dependency: file upload middleware).
 6. **Phase 5 + Phase 6 together** — discounts and analytics, since discount clicks likely feed analytics.
 7. **Phase 8** — hardening pass (RLS, tests, audits) before calling it production-final.
+
+
+- I also want to add a auto search suggestion that uses key words from the services table since thats what our search primarily uses
