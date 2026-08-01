@@ -14,6 +14,7 @@ import { errorHandler } from './middleware/errorHandler.js'
 import { generalLimiter } from './middleware/rateLimiter.js'
 import helmet from 'helmet'
 import stripeWebhookRouter from './routes/stripeWebhook.js'
+import AppError from './helpers/AppError.js'
 
 const app = express()
 app.set('trust proxy', 1)
