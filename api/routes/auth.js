@@ -68,89 +68,89 @@ router.post('/admin/create-user/:account_type', authMiddleware, authAdminMiddlew
     res.status(201).json({ success: true, message: 'User succesfully created' });
 }))
 
-router.post('/admin/create-comped-user', authMiddleware, authAdminMiddleware, validate(adminCreateComppedUserSchema), catchAsync(async (req, res) => {
-    const { firstname, lastname, email, password, phone, is_premium } = req.validated.body;
+// router.post('/admin/create-comped-user', authMiddleware, authAdminMiddleware, validate(adminCreateComppedUserSchema), catchAsync(async (req, res) => {
+//     const { firstname, lastname, email, password, phone, is_premium } = req.validated.body;
 
-    const {data, error} = await supabaseAdmin.auth.admin.createUser({
-        email: email,
-        phone: phone,
-        password: password,
-        email_confirm: true,
-        user_metadata: { firstname: firstname, lastname: lastname }
-    });
+//     const {data, error} = await supabaseAdmin.auth.admin.createUser({
+//         email: email,
+//         phone: phone,
+//         password: password,
+//         email_confirm: true,
+//         user_metadata: { firstname: firstname, lastname: lastname }
+//     });
 
-    if(error){
-        throw new AppError(error.message, 500);
-    }
+//     if(error){
+//         throw new AppError(error.message, 500);
+//     }
 
-    const {data: userData, error: userError} = await supabaseAdmin.from('users').insert({
-        user_id: data.user.id,
-        first_name: firstname,
-        last_name: lastname,
-        email: email,
-        phone: phone,
-        account_type: 'user',
-        is_premium: is_premium,
-        is_comped: true
-    }).select();
+//     const {data: userData, error: userError} = await supabaseAdmin.from('users').insert({
+//         user_id: data.user.id,
+//         first_name: firstname,
+//         last_name: lastname,
+//         email: email,
+//         phone: phone,
+//         account_type: 'user',
+//         is_premium: is_premium,
+//         is_comped: true
+//     }).select();
 
-    if(userError){
-        throw new AppError(userError.message, 500);
-    }
+//     if(userError){
+//         throw new AppError(userError.message, 500);
+//     }
 
-    res.status(201).json({ success: true, message: 'Comped user account created' });
-}))
+//     res.status(201).json({ success: true, message: 'Comped user account created' });
+// }))
 
-router.post('/admin/create-comped-business', authMiddleware, authAdminMiddleware, validate(adminCreateComppedBusinessSchema), catchAsync(async (req, res) => {
-    const { name: businessname, description: businessdescription, address: businessaddress, email: businessemail, phone: businessphone, state, city, zip, firstname, lastname, password, business_tier } = req.validated.body;
+// router.post('/admin/create-comped-business', authMiddleware, authAdminMiddleware, validate(adminCreateComppedBusinessSchema), catchAsync(async (req, res) => {
+//     const { name: businessname, description: businessdescription, address: businessaddress, email: businessemail, phone: businessphone, state, city, zip, firstname, lastname, password, business_tier } = req.validated.body;
 
-    const slug = businessname.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+//     const slug = businessname.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
-    const {data, error} = await supabaseAdmin.auth.admin.createUser({
-        email: businessemail,
-        password: password,
-        email_confirm: true,
-        user_metadata: { firstname: firstname, lastname: lastname }
-    });
+//     const {data, error} = await supabaseAdmin.auth.admin.createUser({
+//         email: businessemail,
+//         password: password,
+//         email_confirm: true,
+//         user_metadata: { firstname: firstname, lastname: lastname }
+//     });
 
-    if(error){
-        throw new AppError(error.message, 500);
-    }
+//     if(error){
+//         throw new AppError(error.message, 500);
+//     }
 
-    const {data: userData, error: userError} = await supabaseAdmin.from('users').insert({
-        user_id: data.user.id,
-        first_name: firstname,
-        last_name: lastname,
-        phone: businessphone,
-        email: businessemail,
-        account_type: 'business'
-    }).select();
+//     const {data: userData, error: userError} = await supabaseAdmin.from('users').insert({
+//         user_id: data.user.id,
+//         first_name: firstname,
+//         last_name: lastname,
+//         phone: businessphone,
+//         email: businessemail,
+//         account_type: 'business'
+//     }).select();
 
-    if(userError){
-        throw new AppError(userError.message, 500);
-    }
+//     if(userError){
+//         throw new AppError(userError.message, 500);
+//     }
 
-    const {data: businessData, error: businessError} = await supabaseAdmin.from('businesses').insert({
-        owner_user_id: data.user.id,
-        name: businessname,
-        description: businessdescription,
-        address: businessaddress,
-        city: city,
-        state: state,
-        zip: zip,
-        phone: businessphone,
-        email: businessemail,
-        slug: slug,
-        business_tier: business_tier,
-        is_comped: true
-    }).select();
+//     const {data: businessData, error: businessError} = await supabaseAdmin.from('businesses').insert({
+//         owner_user_id: data.user.id,
+//         name: businessname,
+//         description: businessdescription,
+//         address: businessaddress,
+//         city: city,
+//         state: state,
+//         zip: zip,
+//         phone: businessphone,
+//         email: businessemail,
+//         slug: slug,
+//         business_tier: business_tier,
+//         is_comped: true
+//     }).select();
 
-    if(businessError){
-        throw new AppError(businessError.message, 500);
-    }
+//     if(businessError){
+//         throw new AppError(businessError.message, 500);
+//     }
 
-    return res.status(201).json({ success: true, message: 'Comped business account created' });
-}))
+//     return res.status(201).json({ success: true, message: 'Comped business account created' });
+// }))
 
 router.post('/signup/business', authLimiter, validate(signupBusinessSchema), catchAsync(async (req, res) => {
     const { name: businessname, description: businessdescription, address: businessaddress, email: businessemail, phone: businessphone, state, city, zip, firstname, lastname, password } = req.validated.body;

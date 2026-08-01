@@ -21,6 +21,7 @@ Look at `stripeWebhook.js`: when a business finishes paying through Stripe, the 
 - Call this right after account creation in `stripeWebhook.js` for both the business path and the premium-user path, and send it through Resend with a branded template pointing at a `/reset-password` page on the frontend.
 - Do the same for the admin `create-comped-business` / `create-comped-user` routes in `auth.js` — right now the admin sets a password directly and has to relay it manually. An email removes that manual step and one more place a password could leak.
 - Consider a short welcome/receipt email alongside it — cheap to add once the send helper exists.
+- **Forgot-password route (TODO, not yet built):** `POST /auth/forgot-password` that accepts `{ email }` from the frontend, then calls `supabaseAdmin.auth.admin.generateLink({ type: 'recovery', email })` and sends the resulting link through the existing `sendEmail.js`/Resend helper. Should respond the same way whether or not the email exists (avoid leaking which emails are registered). This is the general-purpose counterpart to the webhook-triggered password-setup email above — for users who already have an account and just forgot their password.
 
 ## Phase 2 — Geolocation + search upgrade
 
