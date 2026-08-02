@@ -96,15 +96,11 @@ setting it up on checklocalfirstgmail so no problems there
 
 ### Important things to not forget
 
-- Need to set up resend / email smtp, make sure it works with postgresql auth sign up, log in, password reset, payment and signup, magic links
-
 - Ensure no hardcodings in backend routes or frontend routes
 
 - Ensure all accounts and emails with software are linked to checklocalfirst
 
 - Reset envs to ensure security
-
-
 
 ### Features to implement
 
@@ -124,7 +120,7 @@ setting it up on checklocalfirstgmail so no problems there
 
 - Upgrade search route
 
-- Build entire frontend using figma design and then connect to an api
+
 
 
 

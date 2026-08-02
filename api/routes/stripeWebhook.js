@@ -6,6 +6,7 @@ import { catchAsync } from '../helpers/catchAsync.js';
 import crypto from 'crypto';
 import { authMiddleware } from '../middleware/auth.js';
 import { sendEmail } from '../helpers/sendEmail.js';
+import { geocodeAddress } from '../helpers/geocode.js';
 
 const router = express.Router();
 
@@ -94,6 +95,16 @@ router.post('/', express.raw({ type: 'application/json' }), catchAsync(async (re
 
             const slug = metadata.business_name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 
+            // Geocoding failure shouldn't block account creation — geocodeAddress()
+            // fails soft and returns null, which just leaves lat/lng/neighborhood
+            // null for now (backfillable later via scripts/backfillGeocoding.js).
+            const geocoded = await geocodeAddress({
+                address: metadata.business_address,
+                city: metadata.business_city,
+                state: metadata.business_state,
+                zip: metadata.business_zip
+            });
+
             const { error: businessError } = await supabaseAdmin.from('businesses').insert({
                 owner_user_id: authData.user.id,
                 name: metadata.business_name,
@@ -107,7 +118,11 @@ router.post('/', express.raw({ type: 'application/json' }), catchAsync(async (re
                 slug: slug,
                 business_tier: metadata.business_tier,
                 stripe_customer_id: customerId,
-                stripe_subscription_id: subscriptionId
+                stripe_subscription_id: subscriptionId,
+                latitude: geocoded?.latitude ?? null,
+                longitude: geocoded?.longitude ?? null,
+                neighborhood: geocoded?.neighborhood ?? null,
+                geocoded_at: geocoded ? new Date().toISOString() : null
             });
 
             if (businessError) {

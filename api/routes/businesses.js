@@ -5,6 +5,7 @@ import { validate } from '../middleware/validate.js';
 import { verifyBusinessOwnership } from '../helpers/verifyBusinessOwnership.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
+import { geocodeAddress, addressFieldsChanged } from '../helpers/geocode.js';
 import {
     businessSlugParamSchema,
     updateBusinessSchema,
@@ -116,7 +117,31 @@ router.put('/:slug', authMiddleware, validate(updateBusinessSchema), catchAsync(
 
     const businessData = await verifyBusinessOwnership(slug, req.user.id);
 
-    const {data, error} = await supabaseAdmin.from('businesses').update({name, description, address, city, state, zip, phone, email}).eq('slug', slug);
+    // Only re-geocode when address/city/state/zip actually changed in this request —
+    // not on every PUT regardless of what fields were sent.
+    let geoUpdate = {};
+    if (addressFieldsChanged(businessData, { address, city, state, zip })) {
+        const geocoded = await geocodeAddress({
+            address: address ?? businessData.address,
+            city: city ?? businessData.city,
+            state: state ?? businessData.state,
+            zip: zip ?? businessData.zip
+        });
+
+        // Address changed, so any previously-stored coordinates/neighborhood are now
+        // stale regardless of whether the new geocode attempt succeeds — null them out
+        // on failure rather than leaving old, now-wrong coordinates in place.
+        geoUpdate = geocoded
+            ? {
+                latitude: geocoded.latitude,
+                longitude: geocoded.longitude,
+                neighborhood: geocoded.neighborhood,
+                geocoded_at: new Date().toISOString()
+            }
+            : { latitude: null, longitude: null, neighborhood: null, geocoded_at: null };
+    }
+
+    const {data, error} = await supabaseAdmin.from('businesses').update({name, description, address, city, state, zip, phone, email, ...geoUpdate}).eq('slug', slug);
 
     if(error){
         throw new AppError(error.message, 500);
