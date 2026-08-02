@@ -12,12 +12,18 @@ import {
     updatePilotStatusSchema,
     adminUpdateBusinessCategoriesSchema,
     updateFeaturedStatusSchema,
-    updateCarouselStatusSchema
+    updateCarouselStatusSchema,
+    adminUploadPhotoSchema,
+    adminUpdatePhotoSchema,
+    adminPhotoIdParamSchema,
+    updatePhotoApprovalSchema
 } from '../schemas/adminSchemas.js'
 import { categoryIdParamSchema, updateCategorySchema } from '../schemas/categorySchemas.js'
 import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
 import { geocodeAddress, addressFieldsChanged } from '../helpers/geocode.js';
+import { uploadSinglePhoto } from '../middleware/upload.js';
+import { uploadBusinessPhoto, deleteBusinessPhotoFile } from '../helpers/photoStorage.js';
 
 const router = express.Router()
 
@@ -363,10 +369,12 @@ router.get('/businesses/:id/full', validate(businessIdParamSchema), catchAsync(a
 
     const [
         { data: categoryRows, error: categoriesError },
-        { data: services, error: servicesError }
+        { data: services, error: servicesError },
+        { data: photos, error: photosError }
     ] = await Promise.all([
         supabaseAdmin.from('business_categories').select('categories(id, name, slug)').eq('business_id', id),
-        supabaseAdmin.from('services').select('*').eq('business_id', id)
+        supabaseAdmin.from('services').select('*').eq('business_id', id),
+        supabaseAdmin.from('business_photos').select('*').eq('business_id', id).order('display_order', { ascending: true })
     ]);
 
     if (categoriesError) {
@@ -377,14 +385,153 @@ router.get('/businesses/:id/full', validate(businessIdParamSchema), catchAsync(a
         throw new AppError(servicesError.message, 500);
     }
 
+    if (photosError) {
+        throw new AppError(photosError.message, 500);
+    }
+
     return res.status(200).json({
         success: true,
         data: {
             business,
             categories: categoryRows.map((row) => row.categories),
-            services
+            services,
+            photos
         }
     });
+}))
+
+// Admin upload — no cap, no tier restriction, any photo_type, on behalf of any
+// business (see businesses.js for the self-service version's tier gating/caps).
+router.post('/businesses/:id/photos', uploadSinglePhoto, validate(adminUploadPhotoSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+    const { photo_type, display_order } = req.validated.body;
+
+    if (!req.file) {
+        throw new AppError('No photo file provided (field name: "photo")', 400);
+    }
+
+    const { data: business, error: businessError } = await supabaseAdmin
+        .from('businesses')
+        .select('id')
+        .eq('id', id)
+        .single();
+
+    if (businessError || !business) {
+        throw new AppError('Business not found', 404);
+    }
+
+    const { photoUrl, storagePath } = await uploadBusinessPhoto(id, req.file);
+
+    const { data, error } = await supabaseAdmin
+        .from('business_photos')
+        .insert({
+            business_id: id,
+            photo_url: photoUrl,
+            storage_path: storagePath,
+            photo_type,
+            display_order: display_order ?? 0,
+            approved: true // admin IS the moderator — no separate approval step for admin's own uploads
+        })
+        .select()
+        .single();
+
+    if (error) {
+        await deleteBusinessPhotoFile(storagePath);
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(201).json({ success: true, message: 'Photo uploaded', data });
+}))
+
+// Admin sees every photo regardless of approval status — that's the point,
+// this is the review list a moderation queue would be built against.
+router.get('/businesses/:id/photos', validate(businessIdParamSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+
+    const { data, error } = await supabaseAdmin
+        .from('business_photos')
+        .select('*')
+        .eq('business_id', id)
+        .order('display_order', { ascending: true });
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
+// Separate toggle route rather than folding `approved` into the general PUT
+// below, matching the pilot/featured/carousel pattern already used elsewhere —
+// this is the route a moderation-queue UI would call to approve or unpublish a
+// pending business-submitted photo (currently only relevant if the commented-out
+// self-service upload routes in businesses.js get re-enabled; admin's own
+// uploads are already approved: true at insert time above).
+router.patch('/photos/:id/approve', validate(updatePhotoApprovalSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+    const { approved } = req.validated.body;
+
+    const { data, error } = await supabaseAdmin
+        .from('business_photos')
+        .update({ approved })
+        .eq('id', id)
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Photo not found', 404);
+    }
+
+    return res.status(200).json({ success: true, message: `Photo ${approved ? 'approved' : 'unpublished'}`, data });
+}))
+
+router.put('/photos/:id', validate(adminUpdatePhotoSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+    const { photo_type, display_order } = req.validated.body;
+
+    const { data, error } = await supabaseAdmin
+        .from('business_photos')
+        .update({ photo_type, display_order })
+        .eq('id', id)
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Photo not found', 404);
+    }
+
+    return res.status(200).json({ success: true, message: 'Photo updated', data });
+}))
+
+router.delete('/photos/:id', validate(adminPhotoIdParamSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+
+    const { data, error } = await supabaseAdmin
+        .from('business_photos')
+        .delete()
+        .eq('id', id)
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Photo not found', 404);
+    }
+
+    await deleteBusinessPhotoFile(data.storage_path);
+
+    return res.status(200).json({ success: true, message: 'Photo deleted' });
 }))
 
 router.delete('/businesses/:id', validate(businessIdParamSchema), catchAsync(async (req, res) => {
@@ -396,10 +543,23 @@ router.delete('/businesses/:id', validate(businessIdParamSchema), catchAsync(asy
         throw new AppError('Business not found', 404);
     }
 
+    // business_photos rows cascade-delete with the business (FK ON DELETE CASCADE),
+    // but the actual files in Supabase Storage don't clean themselves up.
+    const { data: photos, error: photosError } = await supabaseAdmin
+        .from('business_photos')
+        .select('storage_path')
+        .eq('business_id', id);
+
+    if (photosError) {
+        throw new AppError(photosError.message, 500);
+    }
+
     const { error: bizError } = await supabaseAdmin.from('businesses').delete().eq('id', id);
     if(bizError){
         throw new AppError(bizError.message, 500);
     }
+
+    await Promise.all(photos.map((photo) => deleteBusinessPhotoFile(photo.storage_path)));
 
     if(businessData.owner_user_id){
         const { error: userError } = await supabaseAdmin.from('users').delete().eq('user_id', businessData.owner_user_id);

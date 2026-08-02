@@ -117,6 +117,52 @@ export const updateCarouselStatusSchema = z.object({
     in_carousel: z.boolean(),
   }),
 });
+
+// Admin upload — unlike the business-owner version, photo_type isn't capped or
+// tier-gated here (admin can upload any type, any count, regardless of tier).
+export const adminUploadPhotoSchema = z.object({
+  query: z.object({}).optional(),
+  params: z.object({
+    id: z.coerce.number().int().positive('Invalid business id'),
+  }),
+  body: z.object({
+    photo_type: z.enum(['listing', 'owner', 'gallery'], {
+      errorMap: () => ({ message: 'photo_type must be listing, owner, or gallery' }),
+    }),
+    display_order: z.coerce.number().int().min(0).optional(),
+  }),
+});
+
+export const adminUpdatePhotoSchema = z.object({
+  query: z.object({}).optional(),
+  params: z.object({
+    id: z.coerce.number().int().positive('Invalid photo id'),
+  }),
+  body: z.object({
+    // Admin isn't capped, so — unlike the business-owner update route — photo_type
+    // can be changed here too, not just display_order.
+    photo_type: z.enum(['listing', 'owner', 'gallery']).optional(),
+    display_order: z.coerce.number().int().min(0).optional(),
+  }),
+});
+
+export const adminPhotoIdParamSchema = z.object({
+  body: z.object({}).optional(),
+  query: z.object({}).optional(),
+  params: z.object({
+    id: z.coerce.number().int().positive('Invalid photo id'),
+  }),
+});
+
+export const updatePhotoApprovalSchema = z.object({
+  query: z.object({}).optional(),
+  params: z.object({
+    id: z.coerce.number().int().positive('Invalid photo id'),
+  }),
+  body: z.object({
+    approved: z.boolean(),
+  }),
+});
 export const adminServiceIdParamSchema = z.object({
   body: z.object({}).optional(),
   query: z.object({}).optional(),

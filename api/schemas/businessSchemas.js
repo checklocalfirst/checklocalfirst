@@ -107,3 +107,43 @@ export const serviceIdParamSchema = z.object({
     id: z.coerce.number().int().positive('Invalid service id'),
   }),
 });
+
+// Validates the multipart form's text fields — multer populates req.body with
+// these as strings before this schema ever runs (see middleware/upload.js),
+// same as any other body. The file itself (req.file) isn't part of this schema;
+// the route checks for its presence directly.
+export const uploadPhotoSchema = z.object({
+  query: z.object({}).optional(),
+  params: z.object({
+    slug: slugParam,
+  }),
+  body: z.object({
+    photo_type: z.enum(['listing', 'owner', 'gallery'], {
+      errorMap: () => ({ message: 'photo_type must be listing, owner, or gallery' }),
+    }),
+    display_order: z.coerce.number().int().min(0).optional(),
+  }),
+});
+
+export const updatePhotoSchema = z.object({
+  query: z.object({}).optional(),
+  params: z.object({
+    slug: slugParam,
+    id: z.coerce.number().int().positive('Invalid photo id'),
+  }),
+  body: z.object({
+    // photo_type isn't editable here — changing it could bypass the one-per-type
+    // cap on listing/owner or the tier gate on gallery. Delete and re-upload to
+    // change type instead.
+    display_order: z.coerce.number().int().min(0).optional(),
+  }),
+});
+
+export const photoIdParamSchema = z.object({
+  body: z.object({}).optional(),
+  query: z.object({}).optional(),
+  params: z.object({
+    slug: slugParam,
+    id: z.coerce.number().int().positive('Invalid photo id'),
+  }),
+});
