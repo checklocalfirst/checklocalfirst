@@ -4,6 +4,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "start": "node --import ./instrument.js server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "geocode:backfill": "node scripts/backfillGeocoding.js"
   },
@@ -12,6 +13,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@sentry/node": "^10.69.0",
     "@supabase/supabase-js": "^2.106.2",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
