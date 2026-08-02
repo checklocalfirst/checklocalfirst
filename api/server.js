@@ -28,7 +28,9 @@ import { AppError } from './helpers/AppError.js'
 const DEFAULT_ALLOWED_ORIGINS = [
     'https://www.checklocalfirst.com',
     'https://checklocalfirst.com',
-    'https://clf-frontend.vercel.app'
+    'https://clf-frontend.vercel.app',
+    'https://localhost:3000',
+    'localhost:3000'
 ];
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS
