@@ -12,7 +12,7 @@ import { geocodeAddress, addressFieldsChanged } from '../helpers/geocode.js';
 // import { uploadSinglePhoto } from '../middleware/upload.js';
 // import { uploadBusinessPhoto } from '../helpers/photoStorage.js';
 import { deleteBusinessPhotoFile } from '../helpers/photoStorage.js';
-import { trackLimiter } from '../middleware/rateLimiter.js';
+import { trackLimiter, redeemLimiter } from '../middleware/rateLimiter.js';
 import { aggregateEventsByTypeAndDay } from '../helpers/analytics.js';
 import {
     businessSlugParamSchema,
@@ -637,7 +637,7 @@ router.get('/:slug/discounts', validate(businessSlugParamSchema), catchAsync(asy
 
 // The actual code reveal. Existence/window/redemption-limit checks all happen
 // before the premium check — a 404/410 should win over a "go premium" prompt.
-router.post('/:slug/discounts/:id/redeem', authMiddleware, validate(redeemDiscountSchema), catchAsync(async (req, res) => {
+router.post('/:slug/discounts/:id/redeem', authMiddleware, redeemLimiter, validate(redeemDiscountSchema), catchAsync(async (req, res) => {
     const { slug, id } = req.validated.params;
 
     const { data: business, error: businessError } = await supabase
@@ -660,6 +660,27 @@ router.post('/:slug/discounts/:id/redeem', authMiddleware, validate(redeemDiscou
 
     if (discountError || !discount) {
         throw new AppError('Discount not found', 404);
+    }
+
+    // Already redeemed this exact discount? Show them the code again rather
+    // than erroring — they're still entitled to it, this just isn't a *new*
+    // redemption, so skip straight past the active/window/limit checks below
+    // (which only matter for a first-time redemption) and the increment.
+    // A new discount from the same business is a different row/id, so this
+    // doesn't block redeeming that one too.
+    const { data: existingRedemption, error: existingRedemptionError } = await supabaseAdmin
+        .from('discount_redemptions')
+        .select('id')
+        .eq('discount_id', discount.id)
+        .eq('user_id', req.user.id)
+        .maybeSingle();
+
+    if (existingRedemptionError) {
+        throw new AppError(existingRedemptionError.message, 500);
+    }
+
+    if (existingRedemption) {
+        return res.status(200).json({ success: true, message: 'Already redeemed', data: { code: discount.code } });
     }
 
     const now = new Date();
@@ -691,6 +712,13 @@ router.post('/:slug/discounts/:id/redeem', authMiddleware, validate(redeemDiscou
         .insert({ discount_id: discount.id, user_id: req.user.id });
 
     if (redemptionError) {
+        // 23505 = unique_violation — the DB constraint (migration 027) caught a
+        // near-simultaneous duplicate request that slipped past the check above
+        // before either insert landed. Not an error from the user's point of
+        // view: same outcome as the already-redeemed path, just show the code.
+        if (redemptionError.code === '23505') {
+            return res.status(200).json({ success: true, message: 'Already redeemed', data: { code: discount.code } });
+        }
         throw new AppError(redemptionError.message, 500);
     }
 
