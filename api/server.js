@@ -77,6 +77,11 @@ app.use((req, res, next) => {
 app.use(errorHandler)
 
 
-app.listen(3000, () => {
-    console.log("Server running on port 3000");
+// Render (and most hosts) assign the port dynamically via process.env.PORT —
+// binding to a hardcoded port instead can break or silently misbehave in
+// production. Falls back to 3000 for local dev where PORT isn't set.
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 })
