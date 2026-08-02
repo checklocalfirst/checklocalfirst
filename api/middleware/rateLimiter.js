@@ -18,3 +18,14 @@ export const authLimiter = rateLimit({
     legacyHeaders: false,
     message: { success: false, error: 'Too many attempts, please try again later.' }
 });
+
+// For POST /businesses/:slug/track — public, unauthenticated, writes to the DB
+// on every call. Generous enough for legitimate rapid clicking on one page load,
+// tight enough that it can't be used to cheaply inflate a business's analytics.
+export const trackLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, error: 'Too many requests, please try again shortly.' }
+});

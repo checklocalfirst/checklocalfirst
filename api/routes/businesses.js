@@ -12,6 +12,8 @@ import { geocodeAddress, addressFieldsChanged } from '../helpers/geocode.js';
 // import { uploadSinglePhoto } from '../middleware/upload.js';
 // import { uploadBusinessPhoto } from '../helpers/photoStorage.js';
 import { deleteBusinessPhotoFile } from '../helpers/photoStorage.js';
+import { trackLimiter } from '../middleware/rateLimiter.js';
+import { aggregateEventsByTypeAndDay } from '../helpers/analytics.js';
 import {
     businessSlugParamSchema,
     updateBusinessSchema,
@@ -24,8 +26,48 @@ import {
     // photoIdParamSchema,
     PREMIUM_ONLY_BUSINESS_FIELDS
 } from '../schemas/businessSchemas.js';
+import {
+    createDiscountSchema,
+    updateDiscountSchema,
+    discountIdParamSchema,
+    redeemDiscountSchema
+} from '../schemas/discountSchemas.js';
+import { trackEventSchema, analyticsQuerySchema } from '../schemas/analyticsSchemas.js';
 
 const router = express.Router()
+
+// Redemption is gated on the requesting *user's* premium status, not the
+// posting business's tier — a premium regular user, or a business owner whose
+// own business is premium tier, can redeem; everyone else gets PREMIUM_REQUIRED.
+async function isRedemptionAllowed(userId) {
+    const { data: userRow, error } = await supabaseAdmin
+        .from('users')
+        .select('account_type, is_premium, is_comped')
+        .eq('user_id', userId)
+        .single();
+
+    if (error || !userRow) {
+        return false;
+    }
+
+    if (userRow.is_premium || userRow.is_comped) {
+        return true;
+    }
+
+    if (userRow.account_type === 'business') {
+        const { data: ownedBusiness } = await supabaseAdmin
+            .from('businesses')
+            .select('business_tier, is_comped')
+            .eq('owner_user_id', userId)
+            .single();
+
+        if (ownedBusiness && (ownedBusiness.business_tier === 'premium' || ownedBusiness.is_comped)) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 // Rejects the request outright if a premium-only field (story, timeline) is
 // present in the body but the business isn't on the premium tier, rather than
@@ -455,6 +497,269 @@ router.get('/:slug/photos', validate(businessSlugParamSchema), catchAsync(async 
     }
 
     return res.status(200).json({ success: true, data });
+}))
+
+// DISCOUNTS — any business, any tier, can post one; who can *redeem* it is
+// gated separately below, not here.
+router.post('/:slug/discounts', authMiddleware, validate(createDiscountSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+    const { code, description, discount_type, value, starts_at, expires_at, max_redemptions, active } = req.validated.body;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .insert({
+            business_id: businessData.id,
+            code,
+            description,
+            discount_type,
+            value,
+            starts_at,
+            expires_at,
+            max_redemptions,
+            active: active ?? true
+        })
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(201).json({ success: true, message: 'Discount created', data });
+}))
+
+router.put('/:slug/discounts/:id', authMiddleware, validate(updateDiscountSchema), catchAsync(async (req, res) => {
+    const { slug, id } = req.validated.params;
+    const { code, description, discount_type, value, starts_at, expires_at, max_redemptions, active } = req.validated.body;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    // The schema only enforces percent <= 100 when discount_type is part of
+    // *this* request — belt-and-suspenders check here against whichever type
+    // ends up effective (the one in the body, or the one already stored) so a
+    // value-only update against an existing percent discount can't sneak past.
+    const { data: existing, error: existingError } = await supabaseAdmin
+        .from('discounts')
+        .select('discount_type, value')
+        .eq('id', id)
+        .eq('business_id', businessData.id)
+        .single();
+
+    if (existingError || !existing) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    const effectiveType = discount_type ?? existing.discount_type;
+    const effectiveValue = value ?? existing.value;
+
+    if (effectiveType === 'percent' && effectiveValue > 100) {
+        throw new AppError('Percent discounts must be between 0 and 100', 400);
+    }
+
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .update({ code, description, discount_type, value, starts_at, expires_at, max_redemptions, active })
+        .eq('id', id)
+        .eq('business_id', businessData.id)
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    return res.status(200).json({ success: true, message: 'Discount updated', data });
+}))
+
+router.delete('/:slug/discounts/:id', authMiddleware, validate(discountIdParamSchema), catchAsync(async (req, res) => {
+    const { slug, id } = req.validated.params;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .delete()
+        .eq('id', id)
+        .eq('business_id', businessData.id)
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    return res.status(200).json({ success: true, message: 'Discount deleted' });
+}))
+
+// Public — metadata only, never the `code` column. Deliberately uses
+// supabaseAdmin and hand-picks safe columns rather than the anon client — see
+// migration 024's notes on why discounts has no anon RLS policy at all.
+router.get('/:slug/discounts', validate(businessSlugParamSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+
+    const { data: business, error: businessError } = await supabase
+        .from('businesses')
+        .select('id')
+        .eq('slug', slug)
+        .eq('status', 'approved')
+        .single();
+
+    if (businessError || !business) {
+        throw new AppError('Business not found', 404);
+    }
+
+    const now = new Date().toISOString();
+
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .select('id, description, discount_type, value, starts_at, expires_at, active')
+        .eq('business_id', business.id)
+        .eq('active', true)
+        .or(`starts_at.is.null,starts_at.lte.${now}`)
+        .or(`expires_at.is.null,expires_at.gte.${now}`);
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
+// The actual code reveal. Existence/window/redemption-limit checks all happen
+// before the premium check — a 404/410 should win over a "go premium" prompt.
+router.post('/:slug/discounts/:id/redeem', authMiddleware, validate(redeemDiscountSchema), catchAsync(async (req, res) => {
+    const { slug, id } = req.validated.params;
+
+    const { data: business, error: businessError } = await supabase
+        .from('businesses')
+        .select('id')
+        .eq('slug', slug)
+        .eq('status', 'approved')
+        .single();
+
+    if (businessError || !business) {
+        throw new AppError('Business not found', 404);
+    }
+
+    const { data: discount, error: discountError } = await supabaseAdmin
+        .from('discounts')
+        .select('*')
+        .eq('id', id)
+        .eq('business_id', business.id)
+        .single();
+
+    if (discountError || !discount) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    const now = new Date();
+
+    if (!discount.active) {
+        throw new AppError('This discount is no longer active', 410);
+    }
+
+    if (discount.starts_at && new Date(discount.starts_at) > now) {
+        throw new AppError('This discount is not active yet', 410);
+    }
+
+    if (discount.expires_at && new Date(discount.expires_at) < now) {
+        throw new AppError('This discount has expired', 410);
+    }
+
+    if (discount.max_redemptions !== null && discount.times_redeemed >= discount.max_redemptions) {
+        throw new AppError('This discount has reached its redemption limit', 410);
+    }
+
+    const allowed = await isRedemptionAllowed(req.user.id);
+
+    if (!allowed) {
+        throw new AppError('Premium required to redeem discounts', 403, 'PREMIUM_REQUIRED');
+    }
+
+    const { error: redemptionError } = await supabaseAdmin
+        .from('discount_redemptions')
+        .insert({ discount_id: discount.id, user_id: req.user.id });
+
+    if (redemptionError) {
+        throw new AppError(redemptionError.message, 500);
+    }
+
+    const { error: incrementError } = await supabaseAdmin
+        .from('discounts')
+        .update({ times_redeemed: discount.times_redeemed + 1 })
+        .eq('id', discount.id);
+
+    if (incrementError) {
+        throw new AppError(incrementError.message, 500);
+    }
+
+    return res.status(200).json({ success: true, message: 'Discount redeemed', data: { code: discount.code } });
+}))
+
+// ANALYTICS
+//
+// Public, unauthenticated, rate-limited tighter than general traffic since
+// it's a write endpoint anyone can hit repeatedly.
+router.post('/:slug/track', trackLimiter, validate(trackEventSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+    const { event_type } = req.validated.body;
+
+    const { data: business, error: businessError } = await supabase
+        .from('businesses')
+        .select('id')
+        .eq('slug', slug)
+        .eq('status', 'approved')
+        .single();
+
+    if (businessError || !business) {
+        throw new AppError('Business not found', 404);
+    }
+
+    const { error } = await supabaseAdmin
+        .from('business_analytics_events')
+        .insert({ business_id: business.id, event_type });
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(201).json({ success: true, message: 'Event recorded' });
+}))
+
+// Business owner's own aggregated analytics — defaults to the last 30 days if
+// from/to aren't given. See helpers/analytics.js for why this aggregates in JS
+// rather than a SQL GROUP BY for now.
+router.get('/:slug/analytics', authMiddleware, validate(analyticsQuerySchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+    const { from, to } = req.validated.query;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const rangeStart = from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const rangeEnd = to ?? new Date();
+
+    const { data, error } = await supabaseAdmin
+        .from('business_analytics_events')
+        .select('event_type, created_at')
+        .eq('business_id', businessData.id)
+        .gte('created_at', rangeStart.toISOString())
+        .lte('created_at', rangeEnd.toISOString());
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data: aggregateEventsByTypeAndDay(data) });
 }))
 
 router.delete('/:slug', authMiddleware, validate(businessSlugParamSchema), catchAsync(async (req, res) => {

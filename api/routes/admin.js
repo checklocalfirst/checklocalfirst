@@ -24,6 +24,13 @@ import { AppError } from '../helpers/AppError.js';
 import { geocodeAddress, addressFieldsChanged } from '../helpers/geocode.js';
 import { uploadSinglePhoto } from '../middleware/upload.js';
 import { uploadBusinessPhoto, deleteBusinessPhotoFile } from '../helpers/photoStorage.js';
+import {
+    adminCreateDiscountSchema,
+    adminUpdateDiscountSchema,
+    adminDiscountIdParamSchema
+} from '../schemas/discountSchemas.js'
+import { adminBusinessAnalyticsSchema } from '../schemas/analyticsSchemas.js'
+import { aggregateEventsByTypeAndDay } from '../helpers/analytics.js';
 
 const router = express.Router()
 
@@ -532,6 +539,190 @@ router.delete('/photos/:id', validate(adminPhotoIdParamSchema), catchAsync(async
     await deleteBusinessPhotoFile(data.storage_path);
 
     return res.status(200).json({ success: true, message: 'Photo deleted' });
+}))
+
+// DISCOUNTS — full moderation/CRUD across every business's discounts.
+router.post('/businesses/:id/discounts', validate(adminCreateDiscountSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+    const { code, description, discount_type, value, starts_at, expires_at, max_redemptions, active } = req.validated.body;
+
+    const { data: business, error: businessError } = await supabaseAdmin
+        .from('businesses')
+        .select('id')
+        .eq('id', id)
+        .single();
+
+    if (businessError || !business) {
+        throw new AppError('Business not found', 404);
+    }
+
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .insert({
+            business_id: id,
+            code,
+            description,
+            discount_type,
+            value,
+            starts_at,
+            expires_at,
+            max_redemptions,
+            active: active ?? true
+        })
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(201).json({ success: true, message: 'Discount created', data });
+}))
+
+router.get('/businesses/:id/discounts', validate(businessIdParamSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .select('*')
+        .eq('business_id', id)
+        .order('created_at', { ascending: false });
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
+router.get('/discounts', catchAsync(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .select('*, businesses(name, slug)')
+        .order('created_at', { ascending: false });
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
+router.get('/discounts/:id', validate(adminDiscountIdParamSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .select('*, businesses(name, slug)')
+        .eq('id', id)
+        .single();
+
+    if (error || !data) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
+router.put('/discounts/:id', validate(adminUpdateDiscountSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+    const { code, description, discount_type, value, starts_at, expires_at, max_redemptions, active } = req.validated.body;
+
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .update({ code, description, discount_type, value, starts_at, expires_at, max_redemptions, active })
+        .eq('id', id)
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    return res.status(200).json({ success: true, message: 'Discount updated', data });
+}))
+
+router.delete('/discounts/:id', validate(adminDiscountIdParamSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .delete()
+        .eq('id', id)
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    return res.status(200).json({ success: true, message: 'Discount deleted' });
+}))
+
+// ANALYTICS
+router.get('/businesses/:id/analytics', validate(adminBusinessAnalyticsSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+    const { from, to } = req.validated.query;
+
+    const rangeStart = from ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const rangeEnd = to ?? new Date();
+
+    const { data, error } = await supabaseAdmin
+        .from('business_analytics_events')
+        .select('event_type, created_at')
+        .eq('business_id', id)
+        .gte('created_at', rangeStart.toISOString())
+        .lte('created_at', rangeEnd.toISOString());
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data: aggregateEventsByTypeAndDay(data) });
+}))
+
+// Cross-business overview — total events by type plus a simple "most active
+// businesses" leaderboard, both over the last 30 days.
+router.get('/analytics', catchAsync(async (req, res) => {
+    const rangeStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data, error } = await supabaseAdmin
+        .from('business_analytics_events')
+        .select('business_id, event_type, businesses(name, slug)')
+        .gte('created_at', rangeStart);
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    const totalsByType = {};
+    const totalsByBusiness = new Map();
+
+    for (const event of data) {
+        totalsByType[event.event_type] = (totalsByType[event.event_type] ?? 0) + 1;
+
+        if (!totalsByBusiness.has(event.business_id)) {
+            totalsByBusiness.set(event.business_id, { business: event.businesses, total: 0 });
+        }
+        totalsByBusiness.get(event.business_id).total += 1;
+    }
+
+    const topBusinesses = Array.from(totalsByBusiness.values())
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 10);
+
+    return res.status(200).json({
+        success: true,
+        data: { totalsByType, topBusinesses }
+    });
 }))
 
 router.delete('/businesses/:id', validate(businessIdParamSchema), catchAsync(async (req, res) => {
