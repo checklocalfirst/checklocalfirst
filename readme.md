@@ -7,32 +7,37 @@
 
 ## API Folder
 
-- Contains all of the logic for interacting with supabase, queries to supabase, sign up users, sign up businesses, use stripe payments, use resend for email services.
+- Contains all of the logic for interacting with supabase, queries to supabase, sign up users, sign up businesses, use stripe payments, use resend for email services, geocode business addresses, upload business photos, and track errors through sentry.
 
-- Uses middleware, helpers, routes, and schema architecture to separate code concerns, uses zod validation, uses express rate limit to slow request
+- Uses middleware, helpers, routes, and schema architecture to separate code concerns, uses zod validation on every route body/params/query, uses express rate limit to slow requests down (different limits for general traffic vs auth vs the public tracking/redeem endpoints)
 
-- Utilizes server.js for hosting the main server, utilizes sub routes in routes folder for specific task like users and auth, businesses, services, categories etc. 
+- Utilizes server.js for hosting the main server, utilizes sub routes in routes folder for specific tasks like users and auth, businesses, services, categories, search, favorites, admin, landing signups, and stripe/stripe webhook
 
-- Dbconnect.js utilizes dotenv to pull from a .env file and specify the special keys for connecting to supabase client
+- Dbconnect.js utilizes dotenv to pull from a .env file and specify the special keys for connecting to supabase client (one anon client for public reads, one service-role client for anything that writes or touches sensitive data, bypassing RLS since the app layer already checks permissions itself)
 
 - Stripe and supabase files use dotenv to do the same
 
+- instrument.js sets up Sentry error monitoring, has to load before everything else in server.js does (loaded via the `--import` flag in the start script, not a normal import) — only real 500-level errors get reported, not routine validation/not-found stuff
+
 ### NPM libraries
 
-├── @supabase/supabase-js@2.106.2
-├── cors@2.8.6
-├── dotenv@17.4.2
-├── express-rate-limit@8.6.0
-├── express@5.2.1
-├── helmet@8.3.0
-├── stripe@22.3.2
-└── zod@4.4.3
+├── @sentry/node
+├── @supabase/supabase-js
+├── cors
+├── dotenv
+├── express-rate-limit
+├── express
+├── helmet
+├── multer
+├── resend
+├── stripe
+└── zod
 
 Supabase js is primarily used for connecting to the supabase client we store all of our real info at
 
 Dotenv is used for loading env files to keep secrets safe
 
-Cors is for cross origin resource sharing
+Cors is for cross origin resource sharing, locked down to an actual allowlist of our real frontend domains now, not wide open
 
 Express rate limit to limit api calls
 
@@ -44,6 +49,12 @@ Zod for validation
 
 Stripe for payments
 
+Resend for sending emails (password setup links, receipts, welcome emails) through the business/user signup flows
+
+Multer for handling photo uploads (multipart form data) before they get pushed into supabase storage
+
+Sentry for catching real errors in production instead of finding out from an angry email
+
 
 ## DATABASE Folder
 
@@ -51,7 +62,7 @@ Stripe for payments
 
 - Specifies seed.sql for uploading basic info into the tables for businesses
 
-- Contains migrations showing how we updated the database overtime
+- Contains migrations showing how we updated the database overtime — up to migration 027 now, covering geolocation columns, the pilot business flag, the expanded profile fields (story, owner bio, socials, timeline), multi-category businesses, featured/carousel support, business photos, discounts + redemption tracking, and analytics events
 
 
 
@@ -102,25 +113,49 @@ setting it up on checklocalfirstgmail so no problems there
 
 - Reset envs to ensure security
 
-### Features to implement
+- Make sure SENTRY_DSN is set in Render's env vars (not just locally) or error monitoring silently does nothing in production
 
-- Analytic tracking on business button clicks for calls, individual page listing, and maybe even address, and website clicks
+- Render's start command needs to be `npm start` (not just `node server.js`) since Sentry has to load before anything else does
 
-- Make a admin dashboard for tessa to access to be able to CRUD all users and businesses and services and categories and even more functions for managing everything including featured businesses, carousel, photo upload and more
+- If a new frontend domain ever gets added (staging, a new preview link, whatever) it has to get added to ALLOWED_ORIGINS in Render's env or it'll get blocked by CORS
 
-- Implement photo upload routes to work with supabase
+### Features built (Phase 2)
 
-- Discount integrations using business dashboard to show a discount
+Everything below is live and working, not just planned anymore:
 
-- Build the backend routes and edit the current tables to make discount generation and tracking for users and businesses
+- Geolocation on businesses (lat/long/neighborhood), auto-filled through Nominatim/OpenStreetMap when an address is added or changed, with a backfill script for the businesses that existed before this
 
-- Implement carousel photos for main page dynamically and user dashboard
+- Pilot business flag/badge for internal tracking, admin can toggle it
 
-- Implement geo info
+- Expanded business profile — story, website, owner bio, a 3-entry timeline, and social links (facebook/instagram/yelp). Story and timeline are premium-tier only, everything else is open to both tiers
 
-- Upgrade search route
+- Businesses can belong to multiple categories now (separate from how individual services are tagged), and this is what search's category filter actually uses
 
+- Full business + admin dashboard parity — admin can edit basically every field on any business regardless of tier, not just approve/suspend
 
+- Reworked search — text search, category filter, and now real location/radius filtering with distance shown on results, plus a separate autocomplete/suggestions endpoint for the search bar
 
+- Photo upload wired up to supabase storage (business_photos table + an actual storage bucket) — currently admin-only, business self-upload is built but intentionally turned off so nothing inappropriate goes up without a review step
 
+- Discount system — businesses can create discounts, anyone can see the metadata on the business page, but only premium users (or business owners on a premium plan) can actually reveal the redemption code, tracked per-user so nobody can redeem the same code twice
+
+- Analytics tracking — anonymous click tracking on business pages (calls, page views, address clicks, website clicks, discount reveals), business owners and admin can both pull aggregated stats
+
+- Featured business + homepage carousel management, admin-controlled, both premium-tier only
+
+- Pagination on the bigger list routes (admin tables + search) so things don't fall over once there's actually a lot of businesses in the directory
+
+- Sentry error monitoring wired in, so a real crash in production shows up on a dashboard instead of nobody knowing until a business emails asking why something's broken
+
+- General hardening pass — locked down CORS to our real domains, fixed a missing RLS policy on business photos, cleaned up a redundant unpaid business-signup route, closed a gap that could've let someone redeem the same discount more than once, and fixed the backend to actually use Render's assigned port instead of a hardcoded one
+
+### Still on the list
+
+- No refresh tokens yet — sessions just expire after about an hour and force a re-login, fine for now but a rough edge later
+
+- No automated tests — everything's been tested manually against the actual frontend instead
+
+- Still need a real privacy policy and terms of service written up covering the location data, analytics, and discount redemption tracking now happening
+
+- Confirm supabase's backup/point-in-time recovery setup is actually something we can rely on if something ever goes wrong
 

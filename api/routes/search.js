@@ -2,6 +2,7 @@ import express from 'express';
 import { supabase } from '../dbconnect.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
+import { parsePagination, buildPaginationMeta, paginateArray } from '../helpers/pagination.js';
 
 const router = express.Router();
 
@@ -77,6 +78,8 @@ function intersectIds(a, b) {
 }
 
 router.get('/', catchAsync(async (req, res) => {
+    const pagination = parsePagination(req.query);
+
     const searchQuery =
         typeof req.query.q === 'string' ? req.query.q.trim() : '';
 
@@ -106,7 +109,7 @@ router.get('/', catchAsync(async (req, res) => {
     }
 
     if (!hasQuery && !category && !hasLocation) {
-        return res.json({ success: true, data: [] });
+        return res.json({ success: true, data: [], pagination: buildPaginationMeta({ ...pagination, total: 0 }) });
     }
 
     // Category now filters at the business level via business_categories, not
@@ -139,7 +142,7 @@ router.get('/', catchAsync(async (req, res) => {
         categoryBusinessIds = taggedBusinesses.map((row) => row.business_id);
 
         if (categoryBusinessIds.length === 0) {
-            return res.json({ success: true, data: [] });
+            return res.json({ success: true, data: [], pagination: buildPaginationMeta({ ...pagination, total: 0 }) });
         }
     }
 
@@ -162,7 +165,7 @@ router.get('/', catchAsync(async (req, res) => {
         distanceByBusinessId = new Map(nearby.map((row) => [row.business_id, row.distance_miles]));
 
         if (distanceByBusinessId.size === 0) {
-            return res.json({ success: true, data: [] });
+            return res.json({ success: true, data: [], pagination: buildPaginationMeta({ ...pagination, total: 0 }) });
         }
     }
 
@@ -176,7 +179,7 @@ router.get('/', catchAsync(async (req, res) => {
         );
 
         if (allowedIds !== null && allowedIds.length === 0) {
-            return res.json({ success: true, data: [] });
+            return res.json({ success: true, data: [], pagination: buildPaginationMeta({ ...pagination, total: 0 }) });
         }
 
         let browseQuery = supabase
@@ -194,7 +197,13 @@ router.get('/', catchAsync(async (req, res) => {
             throw new AppError(error.message, 500);
         }
 
-        return res.json({ success: true, data: groupBusinessesDirectly(data, distanceByBusinessId) });
+        const groupedDirect = groupBusinessesDirectly(data, distanceByBusinessId);
+
+        return res.json({
+            success: true,
+            data: paginateArray(groupedDirect, pagination),
+            pagination: buildPaginationMeta({ ...pagination, total: groupedDirect.length }),
+        });
     }
 
     const formattedQuery = searchQuery
@@ -259,7 +268,7 @@ router.get('/', catchAsync(async (req, res) => {
         const ids = fuzzyIds.map((result) => result.id);
 
         if (ids.length === 0) {
-            return res.json({ success: true, data: [] });
+            return res.json({ success: true, data: [], pagination: buildPaginationMeta({ ...pagination, total: 0 }) });
         }
 
         let fuzzyBusinessQuery = supabase
@@ -296,7 +305,11 @@ router.get('/', catchAsync(async (req, res) => {
         grouped.sort((a, b) => (a.distance_miles ?? Infinity) - (b.distance_miles ?? Infinity));
     }
 
-    return res.json({ success: true, data: grouped });
+    return res.json({
+        success: true,
+        data: paginateArray(grouped, pagination),
+        pagination: buildPaginationMeta({ ...pagination, total: grouped.length }),
+    });
 }));
 
 // Autocomplete-as-you-type. Matches against services.name — the same field

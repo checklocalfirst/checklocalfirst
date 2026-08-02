@@ -31,6 +31,7 @@ import {
 } from '../schemas/discountSchemas.js'
 import { adminBusinessAnalyticsSchema } from '../schemas/analyticsSchemas.js'
 import { aggregateEventsByTypeAndDay } from '../helpers/analytics.js';
+import { parsePagination, buildPaginationMeta } from '../helpers/pagination.js';
 
 const router = express.Router()
 
@@ -38,13 +39,19 @@ router.use(authMiddleware, authAdminMiddleware);
 
 
 router.get('/businesses', catchAsync(async (req, res) => {
-    const { data, error } = await supabaseAdmin.from('businesses').select('*').order('created_at', { ascending: false });
+    const { page, limit, from, to } = parsePagination(req.query);
+
+    const { data, error, count } = await supabaseAdmin
+        .from('businesses')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
     if(error){
         throw new AppError(error.message, 500);
     }
 
-    res.status(200).json({ success: true, data });
+    res.status(200).json({ success: true, data, pagination: buildPaginationMeta({ page, limit, total: count }) });
 }))
 
 router.get('/businesses/:id', validate(businessIdParamSchema), catchAsync(async (req, res) => {
@@ -596,16 +603,19 @@ router.get('/businesses/:id/discounts', validate(businessIdParamSchema), catchAs
 }))
 
 router.get('/discounts', catchAsync(async (req, res) => {
-    const { data, error } = await supabaseAdmin
+    const { page, limit, from, to } = parsePagination(req.query);
+
+    const { data, error, count } = await supabaseAdmin
         .from('discounts')
-        .select('*, businesses(name, slug)')
-        .order('created_at', { ascending: false });
+        .select('*, businesses(name, slug)', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
     if (error) {
         throw new AppError(error.message, 500);
     }
 
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data, pagination: buildPaginationMeta({ page, limit, total: count }) });
 }))
 
 router.get('/discounts/:id', validate(adminDiscountIdParamSchema), catchAsync(async (req, res) => {
@@ -768,13 +778,19 @@ router.delete('/businesses/:id', validate(businessIdParamSchema), catchAsync(asy
 }))
 
 router.get('/users', catchAsync(async (req, res) => {
-    const { data, error } = await supabaseAdmin.from('users').select('*').order('created_at', { ascending: false });
+    const { page, limit, from, to } = parsePagination(req.query);
+
+    const { data, error, count } = await supabaseAdmin
+        .from('users')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
     if(error){
         throw new AppError(error.message, 500);
     }
 
-    res.status(200).json({ success: true, data });
+    res.status(200).json({ success: true, data, pagination: buildPaginationMeta({ page, limit, total: count }) });
 }))
 
 router.get('/users/:id', validate(userIdParamSchema), catchAsync(async (req, res) => {
@@ -838,16 +854,19 @@ router.delete('/users/:id', validate(userIdParamSchema), catchAsync(async (req, 
 // SERVICES
 
 router.get('/services', catchAsync(async (req, res) => {
-    const { data, error } = await supabaseAdmin
+    const { page, limit, from, to } = parsePagination(req.query);
+
+    const { data, error, count } = await supabaseAdmin
         .from('services')
-        .select('*, businesses(name, slug)')
-        .order('created_at', { ascending: false });
+        .select('*, businesses(name, slug)', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
     if(error){
         throw new AppError(error.message, 500);
     }
 
-    res.status(200).json({ success: true, data });
+    res.status(200).json({ success: true, data, pagination: buildPaginationMeta({ page, limit, total: count }) });
 }))
 
 router.get('/services/:id', validate(adminServiceIdParamSchema), catchAsync(async (req, res) => {
