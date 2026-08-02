@@ -16,9 +16,38 @@ import helmet from 'helmet'
 import stripeWebhookRouter from './routes/stripeWebhook.js'
 import { AppError } from './helpers/AppError.js'
 
+// Locked down from wide-open per the hardening pass — your own readme flags
+// "no hardcodings," so the actual allowlist lives in ALLOWED_ORIGINS (comma-
+// separated) rather than baked into this file. The fallback list below is just
+// what works out of the box if that env var isn't set yet: your production
+// domain (both with and without www, since a browser's Origin header could
+// reflect either depending on how someone reached the site) and your current
+// Vercel testing domain. Add ALLOWED_ORIGINS to your env once you're ready to
+// stop relying on the fallback — e.g. to add a localhost dev origin without a
+// code change.
+const DEFAULT_ALLOWED_ORIGINS = [
+    'https://www.checklocalfirst.com',
+    'https://checklocalfirst.com',
+    'https://clf-frontend.vercel.app'
+];
+
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map((origin) => origin.trim())
+    : DEFAULT_ALLOWED_ORIGINS;
+
 const app = express()
 app.set('trust proxy', 1)
-app.use(cors())
+app.use(cors({
+    origin: (origin, callback) => {
+        // No Origin header at all means this isn't a browser request (server-to-
+        // server, curl, Postman, the Stripe webhook, etc.) — CORS only ever
+        // applies to browsers, so there's nothing to restrict here.
+        if (!origin || allowedOrigins.includes(origin)) {
+            return callback(null, true);
+        }
+        return callback(new Error('Not allowed by CORS'));
+    }
+}))
 app.use(generalLimiter)
 app.use(helmet())
 

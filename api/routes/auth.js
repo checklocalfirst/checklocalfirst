@@ -152,40 +152,54 @@ router.post('/admin/create-user/:account_type', authMiddleware, authAdminMiddlew
 //     return res.status(201).json({ success: true, message: 'Comped business account created' });
 // }))
 
-router.post('/signup/business', authLimiter, validate(signupBusinessSchema), catchAsync(async (req, res) => {
-    const { name: businessname, description: businessdescription, address: businessaddress, email: businessemail, phone: businessphone, state, city, zip, firstname, lastname, password } = req.validated.body;
-
-    const slug = businessname.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-
-    const {data, error} = await supabase.auth.signUp({
-        email: businessemail,
-        password: password,
-        options: {
-            data: {
-                firstname: firstname,
-                lastname: lastname
-            }
-        }
-    });
-
-    if(error){
-        throw new AppError(error.message, 500);
-    }
-
-    const {data: userData, error: userError} = await supabaseAdmin.from('users').insert({user_id: data.user.id, first_name: firstname, last_name: lastname, phone: businessphone, email: businessemail, account_type: 'business'}).select();
-
-    if(userError){
-        throw new AppError(userError.message, 500);
-    }
-
-    const {data: businessData, error: businessError} = await supabaseAdmin.from('businesses').insert({owner_user_id: data.user.id, name: businessname, description: businessdescription, address: businessaddress, city: city, state: state, zip: zip, phone: businessphone, email: businessemail, slug: slug}).select();
-
-    if(businessError){
-        throw new AppError(businessError.message, 500);
-    }
-
-    return res.status(201).json({ success: true, message: 'User and Business account successfully created' });
-}))
+// This was the unpaid business-signup path, redundant with the Stripe checkout
+// flow (routes/stripe.js's POST /signup/business/checkout) once that became the
+// real front door — flagged in the original roadmap as "decide whether this
+// stays, becomes admin-only, or gets removed." Resolved: admin-only, and
+// disabled entirely for now, same treatment as the create-comped-user/
+// create-comped-business routes right above this one. Left commented rather
+// than deleted for the same reason as those — internal tooling that might come
+// back, not something meant to be a public form.
+//
+// Note for whenever this gets re-enabled: it still uses supabase.auth.signUp
+// with a password from the request body, unlike the create-comped-business
+// pattern above (supabaseAdmin.auth.admin.createUser + a generated recovery
+// link) — worth aligning with that pattern rather than reactivating as-is.
+//
+// router.post('/signup/business', authMiddleware, authAdminMiddleware, authLimiter, validate(signupBusinessSchema), catchAsync(async (req, res) => {
+//     const { name: businessname, description: businessdescription, address: businessaddress, email: businessemail, phone: businessphone, state, city, zip, firstname, lastname, password } = req.validated.body;
+//
+//     const slug = businessname.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+//
+//     const {data, error} = await supabase.auth.signUp({
+//         email: businessemail,
+//         password: password,
+//         options: {
+//             data: {
+//                 firstname: firstname,
+//                 lastname: lastname
+//             }
+//         }
+//     });
+//
+//     if(error){
+//         throw new AppError(error.message, 500);
+//     }
+//
+//     const {data: userData, error: userError} = await supabaseAdmin.from('users').insert({user_id: data.user.id, first_name: firstname, last_name: lastname, phone: businessphone, email: businessemail, account_type: 'business'}).select();
+//
+//     if(userError){
+//         throw new AppError(userError.message, 500);
+//     }
+//
+//     const {data: businessData, error: businessError} = await supabaseAdmin.from('businesses').insert({owner_user_id: data.user.id, name: businessname, description: businessdescription, address: businessaddress, city: city, state: state, zip: zip, phone: businessphone, email: businessemail, slug: slug}).select();
+//
+//     if(businessError){
+//         throw new AppError(businessError.message, 500);
+//     }
+//
+//     return res.status(201).json({ success: true, message: 'User and Business account successfully created' });
+// }))
 
 router.post('/login', authLimiter, validate(loginSchema), catchAsync(async (req, res) => {
     const { email, password } = req.validated.body;
