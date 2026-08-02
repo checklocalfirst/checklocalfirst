@@ -9,12 +9,28 @@ import { geocodeAddress, addressFieldsChanged } from '../helpers/geocode.js';
 import {
     businessSlugParamSchema,
     updateBusinessSchema,
+    updateBusinessCategoriesSchema,
     createServiceSchema,
     updateServiceSchema,
-    serviceIdParamSchema
+    serviceIdParamSchema,
+    PREMIUM_ONLY_BUSINESS_FIELDS
 } from '../schemas/businessSchemas.js';
 
 const router = express.Router()
+
+// Rejects the request outright if a premium-only field (story, timeline) is
+// present in the body but the business isn't on the premium tier, rather than
+// silently dropping the field — the business owner should know why it didn't save.
+function assertPremiumFieldsAllowed(body, businessTier) {
+    const attempted = PREMIUM_ONLY_BUSINESS_FIELDS.filter((field) => body[field] !== undefined);
+
+    if (attempted.length > 0 && businessTier !== 'premium') {
+        throw new AppError(
+            `Upgrade to Premium to set: ${attempted.join(', ')}`,
+            403
+        );
+    }
+}
 
 router.get('/', catchAsync(async (req, res) => {
     const { data, error} = await supabase.from('businesses').select('*').eq('status', 'approved');
@@ -31,6 +47,39 @@ router.get('/me', authMiddleware, catchAsync(async (req, res) => {
 
     if(error){
         throw new AppError('Business not found', 404);
+    }
+
+    res.json({ success: true, data });
+}))
+
+// Fixed-path routes must come before /:slug below, or Express (and the businesses
+// lookup inside it) would treat "featured"/"carousel" as a slug value instead.
+router.get('/featured', catchAsync(async (req, res) => {
+    // Only one business can ever be is_featured = true (DB partial unique index),
+    // so this is a single object (or null), not a list.
+    const { data, error } = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('status', 'approved')
+        .eq('is_featured', true)
+        .maybeSingle();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    res.json({ success: true, data: data ?? null });
+}))
+
+router.get('/carousel', catchAsync(async (req, res) => {
+    const { data, error } = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('status', 'approved')
+        .eq('in_carousel', true);
+
+    if (error) {
+        throw new AppError(error.message, 500);
     }
 
     res.json({ success: true, data });
@@ -113,9 +162,18 @@ router.delete('/:slug/services/:id', authMiddleware, validate(serviceIdParamSche
 
 router.put('/:slug', authMiddleware, validate(updateBusinessSchema), catchAsync(async (req, res) => {
     const { slug } = req.validated.params;
-    const { name, description, address, city, state, zip, phone, email } = req.validated.body;
+    const {
+        name, description, address, city, state, zip, phone, email,
+        website_url, about_owner, facebook_url, instagram_url, yelp_url,
+        story,
+        timeline_year_1, timeline_description_1,
+        timeline_year_2, timeline_description_2,
+        timeline_year_3, timeline_description_3
+    } = req.validated.body;
 
     const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    assertPremiumFieldsAllowed(req.validated.body, businessData.business_tier);
 
     // Only re-geocode when address/city/state/zip actually changed in this request —
     // not on every PUT regardless of what fields were sent.
@@ -141,13 +199,79 @@ router.put('/:slug', authMiddleware, validate(updateBusinessSchema), catchAsync(
             : { latitude: null, longitude: null, neighborhood: null, geocoded_at: null };
     }
 
-    const {data, error} = await supabaseAdmin.from('businesses').update({name, description, address, city, state, zip, phone, email, ...geoUpdate}).eq('slug', slug);
+    const {data, error} = await supabaseAdmin.from('businesses').update({
+        name, description, address, city, state, zip, phone, email,
+        website_url, about_owner, facebook_url, instagram_url, yelp_url,
+        story,
+        timeline_year_1, timeline_description_1,
+        timeline_year_2, timeline_description_2,
+        timeline_year_3, timeline_description_3,
+        ...geoUpdate
+    }).eq('slug', slug);
 
     if(error){
         throw new AppError(error.message, 500);
     }
 
     return res.status(200).json({ success: true, message: `${name ?? businessData.name} successfully updated` });
+}))
+
+// Replace-all semantics: this becomes the business's complete category set.
+// Ownership-enforced, same pattern as the services sub-routes above.
+router.put('/:slug/categories', authMiddleware, validate(updateBusinessCategoriesSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+    const { category_ids } = req.validated.body;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { error: deleteError } = await supabaseAdmin
+        .from('business_categories')
+        .delete()
+        .eq('business_id', businessData.id);
+
+    if (deleteError) {
+        throw new AppError(deleteError.message, 500);
+    }
+
+    if (category_ids.length > 0) {
+        const rows = category_ids.map((category_id) => ({ business_id: businessData.id, category_id }));
+        const { error: insertError } = await supabaseAdmin.from('business_categories').insert(rows);
+
+        if (insertError) {
+            throw new AppError(insertError.message, 500);
+        }
+    }
+
+    return res.status(200).json({ success: true, message: 'Business categories updated' });
+}))
+
+// Public — lets the frontend render category badges on a business's own page,
+// same "separate sub-route" pattern as /:slug/services rather than embedding
+// the join into the main business object.
+router.get('/:slug/categories', validate(businessSlugParamSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+
+    const { data: business, error: businessError } = await supabase
+        .from('businesses')
+        .select('id')
+        .eq('slug', slug)
+        .eq('status', 'approved')
+        .single();
+
+    if (businessError) {
+        throw new AppError('Business not found', 404);
+    }
+
+    const { data, error } = await supabase
+        .from('business_categories')
+        .select('categories(id, name, slug)')
+        .eq('business_id', business.id);
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data: data.map((row) => row.categories) });
 }))
 
 router.delete('/:slug', authMiddleware, validate(businessSlugParamSchema), catchAsync(async (req, res) => {

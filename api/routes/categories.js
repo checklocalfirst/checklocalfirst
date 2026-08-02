@@ -37,7 +37,7 @@ router.delete('/:id', authMiddleware, authAdminMiddleware, validate(categoryIdPa
 
     if (error) {
         if (error.code === '23503') {
-            throw new AppError('Cannot delete category: services are still assigned to it', 409);
+            throw new AppError('Cannot delete category: services or businesses are still assigned to it', 409);
         }
         throw new AppError(error.message, 500);
     }
