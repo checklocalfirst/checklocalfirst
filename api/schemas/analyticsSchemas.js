@@ -9,6 +9,9 @@ export const EVENT_TYPES = [
   'address_click',
   'website_click',
   'discount_click',
+  'facebook_click',
+  'instagram_click',
+  'yelp_click',
 ];
 
 export const trackEventSchema = z.object({

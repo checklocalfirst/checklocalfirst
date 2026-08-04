@@ -412,11 +412,51 @@ router.get('/businesses/:id/full', validate(businessIdParamSchema), catchAsync(a
     });
 }))
 
-// Admin upload — no cap, no tier restriction, any photo_type, on behalf of any
-// business (see businesses.js for the self-service version's tier gating/caps).
+// Deletes whatever photo currently occupies (businessId, timelineSlot), if
+// any, before a new one takes its place — re-uploading/moving into an
+// already-occupied timeline slot is a replace, not an error. excludePhotoId
+// skips a row's own id (used by the PUT /photos/:id move case below, so a
+// photo doesn't "conflict" with the slot it's already sitting in).
+async function replaceTimelinePhotoIfExists(businessId, timelineSlot, excludePhotoId = null) {
+    let query = supabaseAdmin
+        .from('business_photos')
+        .select('id, storage_path')
+        .eq('business_id', businessId)
+        .eq('photo_type', 'timeline')
+        .eq('timeline_slot', timelineSlot);
+
+    if (excludePhotoId) {
+        query = query.neq('id', excludePhotoId);
+    }
+
+    const { data: existing, error } = await query.maybeSingle();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (existing) {
+        await deleteBusinessPhotoFile(existing.storage_path);
+
+        const { error: deleteError } = await supabaseAdmin
+            .from('business_photos')
+            .delete()
+            .eq('id', existing.id);
+
+        if (deleteError) {
+            throw new AppError(deleteError.message, 500);
+        }
+    }
+}
+
+// Admin upload — no cap, no tier restriction, any photo_type (including
+// 'timeline', migration 029), on behalf of any business (see businesses.js
+// for the self-service version's tier gating/caps — business self-service
+// photo upload stays disabled; businesses send photos in out-of-band and
+// admin uploads them here, same as always).
 router.post('/businesses/:id/photos', uploadSinglePhoto, validate(adminUploadPhotoSchema), catchAsync(async (req, res) => {
     const { id } = req.validated.params;
-    const { photo_type, display_order } = req.validated.body;
+    const { photo_type, display_order, timeline_slot } = req.validated.body;
 
     if (!req.file) {
         throw new AppError('No photo file provided (field name: "photo")', 400);
@@ -432,6 +472,10 @@ router.post('/businesses/:id/photos', uploadSinglePhoto, validate(adminUploadPho
         throw new AppError('Business not found', 404);
     }
 
+    if (photo_type === 'timeline') {
+        await replaceTimelinePhotoIfExists(id, timeline_slot);
+    }
+
     const { photoUrl, storagePath } = await uploadBusinessPhoto(id, req.file);
 
     const { data, error } = await supabaseAdmin
@@ -441,6 +485,7 @@ router.post('/businesses/:id/photos', uploadSinglePhoto, validate(adminUploadPho
             photo_url: photoUrl,
             storage_path: storagePath,
             photo_type,
+            timeline_slot: timeline_slot ?? null,
             display_order: display_order ?? 0,
             approved: true // admin IS the moderator — no separate approval step for admin's own uploads
         })
@@ -503,11 +548,38 @@ router.patch('/photos/:id/approve', validate(updatePhotoApprovalSchema), catchAs
 
 router.put('/photos/:id', validate(adminUpdatePhotoSchema), catchAsync(async (req, res) => {
     const { id } = req.validated.params;
-    const { photo_type, display_order } = req.validated.body;
+    const { photo_type, display_order, timeline_slot } = req.validated.body;
+
+    const { data: current, error: currentError } = await supabaseAdmin
+        .from('business_photos')
+        .select('business_id, photo_type, timeline_slot')
+        .eq('id', id)
+        .single();
+
+    if (currentError || !current) {
+        throw new AppError('Photo not found', 404);
+    }
+
+    const effectiveType = photo_type ?? current.photo_type;
+
+    // Moving into (or shifting within) 'timeline' — clear out whatever else
+    // currently holds that slot first, same replace-on-conflict behavior as
+    // the upload route, so the unique index (migration 029) never actually
+    // rejects a legitimate admin move.
+    if (effectiveType === 'timeline' && timeline_slot !== undefined) {
+        await replaceTimelinePhotoIfExists(current.business_id, timeline_slot, id);
+    }
+
+    // Moving *out* of 'timeline' always needs timeline_slot cleared to satisfy
+    // the timeline_slot_consistency check constraint — it can't just keep
+    // whatever value it already had once photo_type is something else.
+    const timelineSlotUpdate = effectiveType === 'timeline'
+        ? { timeline_slot: timeline_slot ?? current.timeline_slot }
+        : { timeline_slot: null };
 
     const { data, error } = await supabaseAdmin
         .from('business_photos')
-        .update({ photo_type, display_order })
+        .update({ photo_type, display_order, ...timelineSlotUpdate })
         .eq('id', id)
         .select()
         .single();

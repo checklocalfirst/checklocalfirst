@@ -119,18 +119,27 @@ export const updateCarouselStatusSchema = z.object({
 });
 
 // Admin upload — unlike the business-owner version, photo_type isn't capped or
-// tier-gated here (admin can upload any type, any count, regardless of tier).
+// tier-gated here (admin can upload any type, any count, regardless of tier,
+// including 'timeline' onto a basic-tier business — same override pattern as
+// timeline text fields in adminUpdateBusinessSchema above). timeline_slot is
+// required exactly when photo_type is 'timeline' and disallowed otherwise —
+// see migration 029's one_photo_per_timeline_slot index, which is what
+// re-uploading the same slot needs to cleanly replace rather than collide with.
 export const adminUploadPhotoSchema = z.object({
   query: z.object({}).optional(),
   params: z.object({
     id: z.coerce.number().int().positive('Invalid business id'),
   }),
   body: z.object({
-    photo_type: z.enum(['listing', 'owner', 'gallery'], {
-      errorMap: () => ({ message: 'photo_type must be listing, owner, or gallery' }),
+    photo_type: z.enum(['listing', 'owner', 'gallery', 'timeline'], {
+      errorMap: () => ({ message: 'photo_type must be listing, owner, gallery, or timeline' }),
     }),
     display_order: z.coerce.number().int().min(0).optional(),
-  }),
+    timeline_slot: z.coerce.number().int().min(1).max(3).optional(),
+  }).refine(
+    (data) => (data.photo_type === 'timeline') === (data.timeline_slot !== undefined),
+    { message: 'timeline_slot (1-3) is required when photo_type is timeline, and must be omitted otherwise', path: ['timeline_slot'] }
+  ),
 });
 
 export const adminUpdatePhotoSchema = z.object({
@@ -141,9 +150,20 @@ export const adminUpdatePhotoSchema = z.object({
   body: z.object({
     // Admin isn't capped, so — unlike the business-owner update route — photo_type
     // can be changed here too, not just display_order.
-    photo_type: z.enum(['listing', 'owner', 'gallery']).optional(),
+    photo_type: z.enum(['listing', 'owner', 'gallery', 'timeline']).optional(),
     display_order: z.coerce.number().int().min(0).optional(),
-  }),
+    // Only enforced when photo_type is present in *this* request (same
+    // partial-update caveat as discountSchemas.js's capPercentValue) — moving
+    // an existing timeline photo's slot without also resending photo_type is
+    // still allowed and left to the route/DB constraint to validate.
+    timeline_slot: z.coerce.number().int().min(1).max(3).optional(),
+  }).refine(
+    (data) => data.photo_type !== 'timeline' || data.timeline_slot !== undefined,
+    { message: 'timeline_slot (1-3) is required when changing photo_type to timeline', path: ['timeline_slot'] }
+  ).refine(
+    (data) => data.photo_type === 'timeline' || data.photo_type === undefined || data.timeline_slot === undefined,
+    { message: 'timeline_slot cannot be set when changing photo_type away from timeline', path: ['timeline_slot'] }
+  ),
 });
 
 export const adminPhotoIdParamSchema = z.object({

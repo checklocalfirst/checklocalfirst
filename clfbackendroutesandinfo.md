@@ -56,9 +56,9 @@ Check for the presence of `data`/`success` rather than assuming `success` is alw
 - `users.account_type`: `user` | `business` | `admin`
 - `businesses.status`: `pending` | `approved` | `suspended` | `rejected` (only `approved` shows up in public browse/search)
 - `businesses.business_tier`: `basic` | `premium`
-- `business_photos.photo_type`: `listing` | `owner` | `gallery`
+- `business_photos.photo_type`: `listing` | `owner` | `gallery` | `timeline`
 - `discounts.discount_type`: `percent` | `fixed`
-- `business_analytics_events.event_type`: `call_click` | `email_click` | `page_view` | `address_click` | `website_click` | `discount_click`
+- `business_analytics_events.event_type`: `call_click` | `email_click` | `page_view` | `address_click` | `website_click` | `discount_click` | `facebook_click` | `instagram_click` | `yelp_click`
 - `landing_signups.source`: `Instagram` | `TikTok` | `Google` | `Facebook` | `Good ol' fashioned word of mouth` (exact strings, case-sensitive)
 
 ---
@@ -84,7 +84,7 @@ All services for that business.
 Array of `{ id, name, slug }` — the business's own category badges (independent of individual service tags).
 
 ### GET `/businesses/:slug/photos`
-Approved photos only, ordered by `display_order`. `data`: array of `{ id, business_id, photo_url, photo_type, display_order, approved, created_at }`. Render whatever comes back — a basic-tier business typically has just `listing` + `owner` photos, premium adds a `gallery` set. Don't assume a fixed number of slots.
+Approved photos only, ordered by `display_order`. `data`: array of `{ id, business_id, photo_url, photo_type, timeline_slot, display_order, approved, created_at }` (`timeline_slot` is `null` except on `photo_type: 'timeline'` rows). Render whatever comes back — a basic-tier business typically has just `listing` + `owner` photos, premium adds a `gallery` set and up to 3 `timeline` photos (one per `timeline_slot`, matching up with `timeline_year_N`/`timeline_description_N` on the business object). Don't assume a fixed number of slots.
 
 ### GET `/businesses/:slug/discounts`
 Public discount list for a business page — **metadata only, never the redemption code**: `{ id, description, discount_type, value, starts_at, expires_at, active }`. Only currently-active, in-window discounts are returned. This is what renders the discount card/button; the actual code only comes back from the authenticated redeem route (§5).
@@ -214,7 +214,7 @@ Body: `{ category_ids: [1, 2, 3] }` — this becomes the business's complete cat
 Auth: Bearer. This is what a **customer** hits from the discount card on a business's public page, not the business owner. Access is gated on the requesting user's own premium status (a premium user, or a business owner whose own business is premium) — everyone else gets a 403 with `code: "PREMIUM_REQUIRED"`. On success: `data: { code }`. Hitting it again after already redeeming just re-shows the same code (idempotent) rather than erroring — safe to let the button be clicked more than once.
 
 ### Analytics
-- `POST /businesses/:slug/track` — public, no auth. Body: `{ event_type }` (one of the enum values in §0). Fire-and-forget from button clicks on a business's public page (call button, email link, address/map click, website link, discount reveal). 201 on success — don't block the UI action (opening the phone dialer, navigating to the website) on this call finishing.
+- `POST /businesses/:slug/track` — public, no auth. Body: `{ event_type }` (one of the enum values in §0). Fire-and-forget from button clicks on a business's public page (call button, email link, address/map click, website link, discount reveal, facebook/instagram/yelp link clicks). 201 on success — don't block the UI action (opening the phone dialer, navigating to the website) on this call finishing.
 - `GET /businesses/:slug/analytics?from&to` — Auth: Bearer, ownership-enforced. Defaults to the last 30 days if `from`/`to` aren't given. `data` shape: `{ "call_click": { "2026-08-01": 3, "2026-08-02": 5 }, "page_view": { ... }, ... }` — one object per event type, keyed by date, ready to feed straight into a chart library (one series per event type, one point per day).
 
 ### DELETE `/businesses/:slug`
@@ -261,11 +261,12 @@ This same pattern is reusable later for a normal "forgot password" flow (`supaba
 - `PUT /admin/businesses/:id/categories` — same replace-all pattern as the business's own version.
 - `DELETE /admin/businesses/:id` — destructive, cascades everything. Hard confirm.
 
-### Business Photos (this is where uploads actually happen)
-- `POST /admin/businesses/:id/photos` — **multipart/form-data**, field name `photo` for the file, plus `photo_type` (`listing`|`owner`|`gallery`) and optional `display_order` as form fields. No cap, no tier restriction — admin can upload as many of any type as they want. This needs a real file picker + type selector in the UI, not just a text form.
-- `GET /admin/businesses/:id/photos` — every photo for a business regardless of approval state (this is the moderation list).
+### Business Photos (this is where uploads actually happen — businesses don't have a self-service upload path; they send photos in and admin uploads them here)
+- `POST /admin/businesses/:id/photos` — **multipart/form-data**, field name `photo` for the file, plus `photo_type` (`listing`|`owner`|`gallery`|`timeline`) and optional `display_order` as form fields. No cap, no tier restriction — admin can upload as many of any type as they want, including a `timeline` photo on a basic-tier business. This needs a real file picker + type selector in the UI, not just a text form.
+  - When `photo_type` is `timeline`, `timeline_slot` (`1`, `2`, or `3`) is **required** — it ties the photo to one of the business's 3 timeline entries (`timeline_year_N`/`timeline_description_N`). Omit `timeline_slot` for every other `photo_type`. Uploading to a slot that already has a photo **replaces** it — the old file and DB row are deleted first, this isn't an error case, so the UI can just always show "upload/replace" for each of the 3 timeline slots rather than needing a separate "remove existing" step first.
+- `GET /admin/businesses/:id/photos` — every photo for a business regardless of approval state (this is the moderation list). `timeline` rows include their `timeline_slot`.
 - `PATCH /admin/photos/:id/approve` — body: `{ approved: boolean }`. Currently a no-op in practice since business self-upload is disabled and admin's own uploads insert as already-approved — but build the approve/unpublish toggle anyway, since it's the exact control a moderation queue needs if self-service uploads get re-enabled later.
-- `PUT /admin/photos/:id` — body: `photo_type`, `display_order`, both optional (unlike the disabled business-owner version, admin can change `photo_type` too).
+- `PUT /admin/photos/:id` — body: `photo_type`, `display_order`, `timeline_slot`, all optional (unlike the disabled business-owner version, admin can change `photo_type` too). Same required-when-timeline rule on `timeline_slot` as the upload route when `photo_type` is being changed *to* `timeline`; moving an already-`timeline` photo to a different slot works by sending just `timeline_slot` without resending `photo_type`. Moving a photo's type *away* from `timeline` clears its slot automatically server-side.
 - `DELETE /admin/photos/:id`.
 
 ### Discounts (full moderation across every business)
