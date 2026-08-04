@@ -62,7 +62,7 @@ Sentry for catching real errors in production instead of finding out from an ang
 
 - Specifies seed.sql for uploading basic info into the tables for businesses
 
-- Contains migrations showing how we updated the database overtime — up to migration 027 now, covering geolocation columns, the pilot business flag, the expanded profile fields (story, owner bio, socials, timeline), multi-category businesses, featured/carousel support, business photos, discounts + redemption tracking, and analytics events
+- Contains migrations showing how we updated the database overtime — up to migration 032 now, covering geolocation columns, the pilot business flag, the expanded profile fields (owner bio, socials, timeline), multi-category businesses, featured/carousel support, business photos (including timeline photos), discounts + redemption tracking (including a per-redemption "used" flag), and analytics events (including social link clicks)
 
 
 
@@ -127,7 +127,7 @@ Everything below is live and working, not just planned anymore:
 
 - Pilot business flag/badge for internal tracking, admin can toggle it
 
-- Expanded business profile — story, website, owner bio, a 3-entry timeline, and social links (facebook/instagram/yelp). Story and timeline are premium-tier only, everything else is open to both tiers
+- Expanded business profile — website, owner bio, a 3-entry timeline (text + an optional photo per entry), and social links (facebook/instagram/yelp). Timeline is premium-tier only, everything else is open to both tiers
 
 - Businesses can belong to multiple categories now (separate from how individual services are tagged), and this is what search's category filter actually uses
 

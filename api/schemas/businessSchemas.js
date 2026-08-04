@@ -10,12 +10,12 @@ export const businessSlugParamSchema = z.object({
   }),
 });
 
-// Story + timeline fields are premium-tier only — enforced in the route handler
+// Timeline fields are premium-tier only — enforced in the route handler
 // (checked against the business's own business_tier), not here in the schema,
 // since whether a field is *allowed* depends on data the schema doesn't have
 // access to. This list is shared with businesses.js so the two stay in sync.
+// (`story` used to live here too — removed along with the column, migration 032.)
 export const PREMIUM_ONLY_BUSINESS_FIELDS = [
-  'story',
   'timeline_year_1',
   'timeline_description_1',
   'timeline_year_2',
@@ -47,7 +47,6 @@ export const updateBusinessSchema = z.object({
     instagram_url: z.string().url('Invalid URL').max(2048).optional(),
     yelp_url: z.string().url('Invalid URL').max(2048).optional(),
     // Premium only — see PREMIUM_ONLY_BUSINESS_FIELDS above.
-    story: z.string().max(5000).optional(),
     timeline_year_1: yearSchema.optional(),
     timeline_description_1: z.string().max(2000).optional(),
     timeline_year_2: yearSchema.optional(),

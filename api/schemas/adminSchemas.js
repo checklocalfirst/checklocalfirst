@@ -34,10 +34,11 @@ export const updateBusinessStatusSchema = z.object({
 const yearSchema = z.coerce.number().int().min(1800).max(2100);
 
 // Full-field admin editor — unlike the business's own PUT /businesses/:slug, admin
-// isn't tier-gated on story/timeline (admin can set any field on any business
+// isn't tier-gated on timeline (admin can set any field on any business
 // regardless of business_tier, same pattern as is_featured/in_carousel already
 // being admin-only togglable) and can manually override latitude/longitude/
 // neighborhood as a stopgap for businesses geocoding can't resolve.
+// (`story` used to be part of this editor too — removed along with the column, migration 032.)
 export const adminUpdateBusinessSchema = z.object({
   query: z.object({}).optional(),
   params: z.object({
@@ -59,7 +60,6 @@ export const adminUpdateBusinessSchema = z.object({
     facebook_url: z.string().url('Invalid URL').max(2048).optional(),
     instagram_url: z.string().url('Invalid URL').max(2048).optional(),
     yelp_url: z.string().url('Invalid URL').max(2048).optional(),
-    story: z.string().max(5000).optional(),
     timeline_year_1: yearSchema.optional(),
     timeline_description_1: z.string().max(2000).optional(),
     timeline_year_2: yearSchema.optional(),

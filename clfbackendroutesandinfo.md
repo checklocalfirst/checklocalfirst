@@ -189,10 +189,9 @@ Partial update, all fields optional:
 |---|---|---|
 | `name`, `description`, `address`, `city`, `state`, `zip`, `phone`, `email` | both | address changes silently trigger re-geocoding |
 | `website_url`, `about_owner`, `facebook_url`, `instagram_url`, `yelp_url` | both | plain URL fields |
-| `story` | **premium only** | long-form business story, up to 5000 chars |
 | `timeline_year_1/2/3`, `timeline_description_1/2/3` | **premium only** | a fixed 3-entry timeline, not an arbitrary list |
 
-**Important for the form:** if a basic-tier business sends any premium-only field, the whole request is rejected with a 403 (not silently dropped). The frontend should hide/disable the `story` and timeline inputs entirely for basic tier and show an upgrade CTA in their place, rather than letting the user fill them out and hit an error on submit.
+**Important for the form:** if a basic-tier business sends any premium-only field, the whole request is rejected with a 403 (not silently dropped). The frontend should hide/disable the timeline inputs entirely for basic tier and show an upgrade CTA in their place, rather than letting the user fill them out and hit an error on submit.
 
 ### PUT `/businesses/:slug/categories` — replace-all semantics
 Body: `{ category_ids: [1, 2, 3] }` — this becomes the business's complete category set (min 1, max 20). Build as a multi-select against `GET /categories`. A business must always keep at least one category, since `business_categories` is what drives `/search`'s category filter now.
@@ -255,7 +254,7 @@ This same pattern is reusable later for a normal "forgot password" flow (`supaba
 - `GET /admin/businesses/:id` — numeric id, not slug.
 - `GET /admin/businesses/:id/full` — **the review/detail screen.** One call returns the business row plus its categories, services, and photos together — build the "review this pending business" or "business detail" screen against this, not four separate calls.
 - `PATCH /admin/businesses/:id/status` — body: `{ status }`. **Will reject approval (400) if the business has zero categories set** — surface that message clearly rather than a generic failure, since it tells the admin exactly what's blocking approval.
-- `PATCH /admin/businesses/:id` — the full-field editor: every profile field from §5's table (admin bypasses the tier gate — can set story/timeline on a basic-tier business), plus `business_tier`, `is_comped`, and a manual `latitude`/`longitude`/`neighborhood` override for addresses geocoding couldn't resolve.
+- `PATCH /admin/businesses/:id` — the full-field editor: every profile field from §5's table (admin bypasses the tier gate — can set timeline on a basic-tier business), plus `business_tier`, `is_comped`, and a manual `latitude`/`longitude`/`neighborhood` override for addresses geocoding couldn't resolve.
 - `PATCH /admin/businesses/:id/pilot` — body: `{ pilot_business: boolean }`. Pure badge/tag, no functional effect elsewhere — a simple toggle switch is enough UI.
 - `PATCH /admin/businesses/:id/featured` — body: `{ is_featured: boolean }`. **Only one business can be featured at once** — setting a new one automatically un-features whichever business currently holds that slot. Worth a confirm dialog ("this will remove the current featured business") rather than a bare toggle. Requires premium tier — disable the toggle for basic-tier businesses rather than letting it fail.
 - `PATCH /admin/businesses/:id/carousel` — body: `{ in_carousel: boolean }`. Plain toggle, no uniqueness constraint, but still premium-tier-only.
@@ -339,7 +338,7 @@ This isn't legal advice — just a factual rundown of what data actually flows t
 
 **Personal information collected directly:**
 - Users: first/last name, email, phone number, password (never stored in plaintext or seen by this backend — Supabase Auth handles hashing).
-- Businesses: owner first/last name, business name/description/address/phone/email, and everything in the expanded profile (story, owner bio, social links, timeline) if filled in.
+- Businesses: owner first/last name, business name/description/address/phone/email, and everything in the expanded profile (owner bio, social links, timeline) if filled in.
 
 **Location data:** a business's street address is sent to Nominatim (OpenStreetMap's free geocoding service) to resolve latitude/longitude/neighborhood for the "near me" search feature. This means a third party (Nominatim) receives the business address on every create/update. Worth a line in the privacy policy disclosing this specific third-party data flow.
 

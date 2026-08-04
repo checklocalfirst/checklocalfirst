@@ -69,7 +69,7 @@ async function isRedemptionAllowed(userId) {
     return false;
 }
 
-// Rejects the request outright if a premium-only field (story, timeline) is
+// Rejects the request outright if a premium-only field (timeline) is
 // present in the body but the business isn't on the premium tier, rather than
 // silently dropping the field — the business owner should know why it didn't save.
 function assertPremiumFieldsAllowed(body, businessTier) {
@@ -252,7 +252,6 @@ router.put('/:slug', authMiddleware, validate(updateBusinessSchema), catchAsync(
     const {
         name, description, address, city, state, zip, phone, email,
         website_url, about_owner, facebook_url, instagram_url, yelp_url,
-        story,
         timeline_year_1, timeline_description_1,
         timeline_year_2, timeline_description_2,
         timeline_year_3, timeline_description_3
@@ -289,7 +288,6 @@ router.put('/:slug', authMiddleware, validate(updateBusinessSchema), catchAsync(
     const {data, error} = await supabaseAdmin.from('businesses').update({
         name, description, address, city, state, zip, phone, email,
         website_url, about_owner, facebook_url, instagram_url, yelp_url,
-        story,
         timeline_year_1, timeline_description_1,
         timeline_year_2, timeline_description_2,
         timeline_year_3, timeline_description_3,

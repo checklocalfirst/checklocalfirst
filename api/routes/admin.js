@@ -114,7 +114,7 @@ router.patch('/businesses/:id/status', validate(updateBusinessStatusSchema), cat
 
 // Full-field editor — everything short of `status` (that stays on its own route
 // above since it's a distinct approve/suspend workflow). Admin is never tier-gated
-// here: it can set story/timeline on a basic business, same pattern as
+// here: it can set timeline fields on a basic business, same pattern as
 // is_featured/in_carousel already being admin-only togglable regardless of tier.
 router.patch('/businesses/:id', validate(adminUpdateBusinessSchema), catchAsync(async (req, res) => {
     const { id } = req.validated.params;
@@ -122,7 +122,6 @@ router.patch('/businesses/:id', validate(adminUpdateBusinessSchema), catchAsync(
         name, description, address, city, state, zip, phone, email,
         business_tier, is_comped,
         website_url, about_owner, facebook_url, instagram_url, yelp_url,
-        story,
         timeline_year_1, timeline_description_1,
         timeline_year_2, timeline_description_2,
         timeline_year_3, timeline_description_3,
@@ -179,7 +178,6 @@ router.patch('/businesses/:id', validate(adminUpdateBusinessSchema), catchAsync(
             name, description, address, city, state, zip, phone, email,
             business_tier, is_comped,
             website_url, about_owner, facebook_url, instagram_url, yelp_url,
-            story,
             timeline_year_1, timeline_description_1,
             timeline_year_2, timeline_description_2,
             timeline_year_3, timeline_description_3,

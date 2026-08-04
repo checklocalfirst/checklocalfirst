@@ -1,0 +1,13 @@
+-- 032: removes the business "story" field entirely (long-form business story,
+-- premium-only, migration 016) — not being used, dropping it outright rather
+-- than just hiding it in the API/UI. Irreversible: existing story text is
+-- gone once this runs.
+--
+-- DO NOT APPLY THIS UNTIL the application code stops referencing `story`:
+--   api/schemas/businessSchemas.js  (updateBusinessSchema body, PREMIUM_ONLY_BUSINESS_FIELDS)
+--   api/schemas/adminSchemas.js     (adminUpdateBusinessSchema body)
+--   api/routes/businesses.js        (PUT /:slug destructure + update payload)
+--   api/routes/admin.js             (PATCH /businesses/:id destructure + update payload)
+-- Applying this first would 500 any PUT/PATCH request that still tries to
+-- write to a column that no longer exists.
+ALTER TABLE businesses DROP COLUMN story;
