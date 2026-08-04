@@ -30,7 +30,9 @@ import {
     createDiscountSchema,
     updateDiscountSchema,
     discountIdParamSchema,
-    redeemDiscountSchema
+    redeemDiscountSchema,
+    redemptionIdParamSchema,
+    updateRedemptionSchema
 } from '../schemas/discountSchemas.js';
 import { trackEventSchema, analyticsQuerySchema } from '../schemas/analyticsSchemas.js';
 
@@ -597,6 +599,154 @@ router.delete('/:slug/discounts/:id', authMiddleware, validate(discountIdParamSc
     }
 
     return res.status(200).json({ success: true, message: 'Discount deleted' });
+}))
+
+// REDEMPTIONS — business owner's view/management of who's redeemed their
+// discounts. Distinct from POST /:slug/discounts/:id/redeem above, which is
+// the customer-facing "reveal my code" route; the business owner never sees
+// codes revealed to customers through these routes, just who claimed what.
+router.get('/:slug/discounts/:id/redemptions', authMiddleware, validate(discountIdParamSchema), catchAsync(async (req, res) => {
+    const { slug, id } = req.validated.params;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data: discount, error: discountError } = await supabaseAdmin
+        .from('discounts')
+        .select('id')
+        .eq('id', id)
+        .eq('business_id', businessData.id)
+        .single();
+
+    if (discountError || !discount) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    const { data, error } = await supabaseAdmin
+        .from('discount_redemptions')
+        .select('*, users(first_name, last_name, email)')
+        .eq('discount_id', id)
+        .order('redeemed_at', { ascending: false });
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
+// Convenience aggregate — every redemption across every one of this business's
+// discounts in one call, for a single "Redemptions" dashboard tab rather than
+// one request per discount card.
+router.get('/:slug/redemptions', authMiddleware, validate(businessSlugParamSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data: discountRows, error: discountsError } = await supabaseAdmin
+        .from('discounts')
+        .select('id')
+        .eq('business_id', businessData.id);
+
+    if (discountsError) {
+        throw new AppError(discountsError.message, 500);
+    }
+
+    const discountIds = discountRows.map((row) => row.id);
+
+    if (discountIds.length === 0) {
+        return res.status(200).json({ success: true, data: [] });
+    }
+
+    const { data, error } = await supabaseAdmin
+        .from('discount_redemptions')
+        .select('*, users(first_name, last_name, email), discounts(code, description)')
+        .in('discount_id', discountIds)
+        .order('redeemed_at', { ascending: false });
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
+// Bookkeeping only — marks whether the business has fulfilled/seen this
+// redemption in person. Does NOT touch the discount_redemptions uniqueness
+// constraint (migration 027) or let the user redeem again; that's what DELETE
+// below is for instead, a deliberately distinct action.
+router.patch('/:slug/discounts/:id/redemptions/:redemptionId', authMiddleware, validate(updateRedemptionSchema), catchAsync(async (req, res) => {
+    const { slug, id, redemptionId } = req.validated.params;
+    const { used } = req.validated.body;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data: discount, error: discountError } = await supabaseAdmin
+        .from('discounts')
+        .select('id')
+        .eq('id', id)
+        .eq('business_id', businessData.id)
+        .single();
+
+    if (discountError || !discount) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    const { data, error } = await supabaseAdmin
+        .from('discount_redemptions')
+        .update({ used, used_at: used ? new Date().toISOString() : null })
+        .eq('id', redemptionId)
+        .eq('discount_id', id)
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Redemption not found', 404);
+    }
+
+    return res.status(200).json({ success: true, message: `Redemption marked ${used ? 'used' : 'not used'}`, data });
+}))
+
+// Deletes the redemption row outright — unlike the "used" toggle above, this
+// DOES free the customer up to redeem this same discount again, since it's
+// what the discount_redemptions_unique_user_discount constraint (migration
+// 027) actually matches against. Distinct action, distinct UI confirmation.
+router.delete('/:slug/discounts/:id/redemptions/:redemptionId', authMiddleware, validate(redemptionIdParamSchema), catchAsync(async (req, res) => {
+    const { slug, id, redemptionId } = req.validated.params;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data: discount, error: discountError } = await supabaseAdmin
+        .from('discounts')
+        .select('id')
+        .eq('id', id)
+        .eq('business_id', businessData.id)
+        .single();
+
+    if (discountError || !discount) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    const { data, error } = await supabaseAdmin
+        .from('discount_redemptions')
+        .delete()
+        .eq('id', redemptionId)
+        .eq('discount_id', id)
+        .select()
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Redemption not found', 404);
+    }
+
+    return res.status(200).json({ success: true, message: 'Redemption deleted — that user can redeem this discount again' });
 }))
 
 // Public — metadata only, never the `code` column. Deliberately uses

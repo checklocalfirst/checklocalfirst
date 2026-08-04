@@ -8,6 +8,7 @@ import { AppError } from '../helpers/AppError.js';
 import { supabaseAdmin } from "../dbconnect.js";
 import { authMiddleware } from "../middleware/auth.js";
 import { verifyBusinessOwnership } from '../helpers/verifyBusinessOwnership.js';
+import { sendEmail } from '../helpers/sendEmail.js';
 
 const router = express.Router();
 
@@ -219,10 +220,33 @@ router.post('/business/:slug/cancel', authMiddleware, validate(businessSlugParam
         cancel_at_period_end: true,
     });
 
+    const cancelAtIso = new Date(subscription.cancel_at * 1000).toISOString();
+
+    // Best-effort — the cancellation itself already went through on Stripe's side above,
+    // so a Resend hiccup here shouldn't fail the request. Same non-blocking pattern as
+    // every other email send in stripeWebhook.js.
+    try {
+        const cancelDate = new Date(subscription.cancel_at * 1000).toLocaleDateString('en-US', {
+            year: 'numeric', month: 'long', day: 'numeric'
+        });
+
+        await sendEmail({
+            to: business.email,
+            subject: 'Your CheckLocalFirst subscription has been cancelled',
+            html: `
+                <p>Hi,</p>
+                <p>Your subscription for <strong>${business.name}</strong> has been cancelled. You'll keep full access until <strong>${cancelDate}</strong>, when it will end.</p>
+                <p>Changed your mind? You can resubscribe any time before then from your business dashboard.</p>
+            `
+        });
+    } catch (emailErr) {
+        console.error(`Failed to send cancellation email for business ${business.email ?? slug}:`, emailErr);
+    }
+
     return res.status(200).json({
         success: true,
         message: 'Subscription will cancel at the end of the current billing period',
-        data: { cancel_at: new Date(subscription.cancel_at * 1000).toISOString() },
+        data: { cancel_at: cancelAtIso },
     });
 }));
 
@@ -231,7 +255,7 @@ router.post('/business/:slug/cancel', authMiddleware, validate(businessSlugParam
 router.post('/premium-user/cancel', authMiddleware, validate(premiumUserCancelSchema), catchAsync(async (req, res) => {
     const { data: user, error } = await supabaseAdmin
         .from('users')
-        .select('is_premium, is_comped, stripe_subscription_id')
+        .select('email, first_name, is_premium, is_comped, stripe_subscription_id')
         .eq('user_id', req.user.id)
         .single();
 
@@ -255,10 +279,33 @@ router.post('/premium-user/cancel', authMiddleware, validate(premiumUserCancelSc
         cancel_at_period_end: true,
     });
 
+    const cancelAtIso = new Date(subscription.cancel_at * 1000).toISOString();
+
+    // Best-effort — same non-blocking pattern as the business cancel route above and
+    // every email send in stripeWebhook.js; the cancellation already committed on
+    // Stripe's side, so a Resend hiccup here shouldn't fail the request.
+    try {
+        const cancelDate = new Date(subscription.cancel_at * 1000).toLocaleDateString('en-US', {
+            year: 'numeric', month: 'long', day: 'numeric'
+        });
+
+        await sendEmail({
+            to: user.email,
+            subject: 'Your CheckLocalFirst Premium subscription has been cancelled',
+            html: `
+                <p>Hi ${user.first_name || 'there'},</p>
+                <p>Your CheckLocalFirst Premium subscription has been cancelled. You'll keep full Premium access until <strong>${cancelDate}</strong>, when it will end.</p>
+                <p>Changed your mind? You can resubscribe any time before then from your account settings.</p>
+            `
+        });
+    } catch (emailErr) {
+        console.error(`Failed to send premium-cancellation email for user ${req.user.id}:`, emailErr);
+    }
+
     return res.status(200).json({
         success: true,
         message: 'Premium will cancel at the end of the current billing period',
-        data: { cancel_at: new Date(subscription.cancel_at * 1000).toISOString() },
+        data: { cancel_at: cancelAtIso },
     });
 }));
 

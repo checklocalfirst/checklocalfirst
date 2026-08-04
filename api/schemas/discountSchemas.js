@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const slugParam = z.string().min(1, 'Invalid business slug');
 const discountIdParam = z.coerce.number().int().positive('Invalid discount id');
+const redemptionIdParam = z.coerce.number().int().positive('Invalid redemption id');
 
 // Shared so a percent discount can't be created at, say, 250% — value is a
 // plain positive number for 'fixed' (a dollar amount), but capped at 100 when
@@ -60,6 +61,23 @@ export const redeemDiscountSchema = z.object({
   body: z.object({}).optional(),
   query: z.object({}).optional(),
   params: z.object({ slug: slugParam, id: discountIdParam }),
+});
+
+// Business owner's view/management of who's redeemed their discount — distinct
+// from the redeem route above, which is what a *customer* hits. "used" is
+// bookkeeping only (migration 031): it doesn't touch the discount_redemptions
+// uniqueness constraint or unlock re-redemption. Deleting the row is the
+// separate action that actually does that.
+export const redemptionIdParamSchema = z.object({
+  body: z.object({}).optional(),
+  query: z.object({}).optional(),
+  params: z.object({ slug: slugParam, id: discountIdParam, redemptionId: redemptionIdParam }),
+});
+
+export const updateRedemptionSchema = z.object({
+  query: z.object({}).optional(),
+  params: z.object({ slug: slugParam, id: discountIdParam, redemptionId: redemptionIdParam }),
+  body: z.object({ used: z.boolean() }),
 });
 
 // Admin variants — same body shape, id-based params instead of slug-scoped.

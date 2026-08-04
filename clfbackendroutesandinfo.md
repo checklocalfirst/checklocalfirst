@@ -159,7 +159,7 @@ Auth: Bearer. No body. Upgrades a free user to premium. Response: `{ client_secr
 Auth: Bearer, must own the business. No body. Basic → premium upgrade, charges the prorated difference immediately. Handle 409 ("already premium") and 402 (card declined) distinctly.
 
 ### POST `/stripe/business/:slug/cancel` / `POST /stripe/premium-user/cancel`
-Auth: Bearer. No body. Cancels at period end, not immediately — response includes `cancel_at`, show the user when access actually ends.
+Auth: Bearer. No body. Cancels at period end, not immediately — response includes `cancel_at`, show the user when access actually ends. Also sends a best-effort confirmation email (via Resend) stating the subscription is cancelled and the date access ends — a failure to send doesn't fail the request, since the cancellation itself already went through on Stripe's side.
 
 ---
 
@@ -212,6 +212,12 @@ Body: `{ category_ids: [1, 2, 3] }` — this becomes the business's complete cat
 
 ### POST `/businesses/:slug/discounts/:id/redeem` — the "reveal code" button
 Auth: Bearer. This is what a **customer** hits from the discount card on a business's public page, not the business owner. Access is gated on the requesting user's own premium status (a premium user, or a business owner whose own business is premium) — everyone else gets a 403 with `code: "PREMIUM_REQUIRED"`. On success: `data: { code }`. Hitting it again after already redeeming just re-shows the same code (idempotent) rather than erroring — safe to let the button be clicked more than once.
+
+### Redemptions (ownership-enforced) — who's redeemed a business's discounts
+- `GET /businesses/:slug/discounts/:id/redemptions` — everyone who's redeemed one specific discount. `data`: array of `{ id, discount_id, user_id, redeemed_at, used, used_at, users: { first_name, last_name, email } }`.
+- `GET /businesses/:slug/redemptions` — convenience aggregate: every redemption across *all* of this business's discounts in one call (each row also embeds `discounts: { code, description }`), for a single "Redemptions" dashboard tab instead of one request per discount card.
+- `PATCH /businesses/:slug/discounts/:id/redemptions/:redemptionId` — body: `{ used: boolean }`. **Bookkeeping only** — lets the business mark that a customer has actually come in and claimed their discount. Does **not** affect whether that user can redeem again; the one-redemption-per-user-per-discount rule (migration 027) is untouched by this. Stamps/clears `used_at` alongside `used`.
+- `DELETE /businesses/:slug/discounts/:id/redemptions/:redemptionId` — removes the redemption row entirely. Unlike the `used` toggle, this **does** let that same customer redeem the discount again later, since it's the row the uniqueness constraint was matching against. Give this a distinctly-worded confirm dialog from the `used` toggle so the two don't read as the same action.
 
 ### Analytics
 - `POST /businesses/:slug/track` — public, no auth. Body: `{ event_type }` (one of the enum values in §0). Fire-and-forget from button clicks on a business's public page (call button, email link, address/map click, website link, discount reveal, facebook/instagram/yelp link clicks). 201 on success — don't block the UI action (opening the phone dialer, navigating to the website) on this call finishing.
@@ -273,6 +279,7 @@ This same pattern is reusable later for a normal "forgot password" flow (`supaba
 - `GET /admin/discounts` — paginated (§8), all businesses, newest first, each row includes `businesses: { name, slug }`.
 - `GET /admin/discounts/:id`, `PUT /admin/discounts/:id`, `DELETE /admin/discounts/:id` — same field shape as the business-owner version.
 - `POST /admin/businesses/:id/discounts`, `GET /admin/businesses/:id/discounts` — create/list scoped to one business.
+- `GET /admin/discounts/:id/redemptions` — same shape as the business-owner's own `GET /businesses/:slug/discounts/:id/redemptions` (§5), across any business. Read-only on the admin side — no mark-used/delete controls here, just visibility.
 
 ### Analytics
 - `GET /admin/businesses/:id/analytics?from&to` — same per-business shape as the business dashboard's own version.

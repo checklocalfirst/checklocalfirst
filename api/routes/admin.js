@@ -747,6 +747,35 @@ router.delete('/discounts/:id', validate(adminDiscountIdParamSchema), catchAsync
     return res.status(200).json({ success: true, message: 'Discount deleted' });
 }))
 
+// Same shape as the business-owner's own GET /businesses/:slug/discounts/:id/redemptions
+// (businesses.js) — who's redeemed this discount, across any business. Read-only
+// here; admin doesn't get the mark-used/delete controls the business owner has.
+router.get('/discounts/:id/redemptions', validate(adminDiscountIdParamSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+
+    const { data: discount, error: discountError } = await supabaseAdmin
+        .from('discounts')
+        .select('id')
+        .eq('id', id)
+        .single();
+
+    if (discountError || !discount) {
+        throw new AppError('Discount not found', 404);
+    }
+
+    const { data, error } = await supabaseAdmin
+        .from('discount_redemptions')
+        .select('*, users(first_name, last_name, email)')
+        .eq('discount_id', id)
+        .order('redeemed_at', { ascending: false });
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
 // ANALYTICS
 router.get('/businesses/:id/analytics', validate(adminBusinessAnalyticsSchema), catchAsync(async (req, res) => {
     const { id } = req.validated.params;
