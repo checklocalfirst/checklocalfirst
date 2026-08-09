@@ -361,6 +361,26 @@ router.get('/:slug/categories', validate(businessSlugParamSchema), catchAsync(as
     return res.status(200).json({ success: true, data: data.map((row) => row.categories) });
 }))
 
+// Owner-only twin of GET /:slug/categories above — same shape, but scoped
+// through verifyBusinessOwnership instead of a status='approved' filter, so
+// a business can see its own categories while still pending admin approval.
+router.get('/:slug/owner/categories', authMiddleware, validate(businessSlugParamSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data, error } = await supabaseAdmin
+        .from('business_categories')
+        .select('categories(id, name, slug)')
+        .eq('business_id', businessData.id);
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data: data.map((row) => row.categories) });
+}))
+
 // Business self-service photo upload/reorder/delete — disabled per Justyce's call:
 // businesses could otherwise upload inappropriate or off-brand images with no
 // review step. All photo uploads currently go through the admin routes in
@@ -490,6 +510,28 @@ router.get('/:slug/photos', validate(businessSlugParamSchema), catchAsync(async 
         .select('*')
         .eq('business_id', business.id)
         .eq('approved', true)
+        .order('display_order', { ascending: true });
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
+// Owner-only twin of GET /:slug/photos above — scoped through
+// verifyBusinessOwnership instead of status='approved', and deliberately
+// doesn't filter on approved so the owner can see photos still pending
+// admin review (unlike the public route, which only shows approved ones).
+router.get('/:slug/owner/photos', authMiddleware, validate(businessSlugParamSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data, error } = await supabaseAdmin
+        .from('business_photos')
+        .select('*')
+        .eq('business_id', businessData.id)
         .order('display_order', { ascending: true });
 
     if (error) {
@@ -775,6 +817,29 @@ router.get('/:slug/discounts', validate(businessSlugParamSchema), catchAsync(asy
         .eq('active', true)
         .or(`starts_at.is.null,starts_at.lte.${now}`)
         .or(`expires_at.is.null,expires_at.gte.${now}`);
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
+// Owner-only twin of GET /:slug/discounts above — full rows (including the
+// `code` column the public route deliberately hides) and not filtered to
+// active/in-window, since the dashboard needs to manage inactive/expired
+// discounts too. Scoped through verifyBusinessOwnership instead of
+// status='approved'.
+router.get('/:slug/owner/discounts', authMiddleware, validate(businessSlugParamSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data, error } = await supabaseAdmin
+        .from('discounts')
+        .select('*')
+        .eq('business_id', businessData.id)
+        .order('created_at', { ascending: false });
 
     if (error) {
         throw new AppError(error.message, 500);
