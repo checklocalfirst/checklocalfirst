@@ -29,8 +29,7 @@ const DEFAULT_ALLOWED_ORIGINS = [
     'https://www.checklocalfirst.com',
     'https://checklocalfirst.com',
     'https://clf-frontend.vercel.app',
-    'https://localhost:3000',
-    'localhost:3000'
+    'https://clf-frontend-one.vercel.app/'
 ];
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS

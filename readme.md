@@ -159,3 +159,5 @@ Everything below is live and working, not just planned anymore:
 
 - Confirm supabase's backup/point-in-time recovery setup is actually something we can rely on if something ever goes wrong
 
+- Updated readme
+
