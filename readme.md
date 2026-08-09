@@ -79,8 +79,6 @@ Sentry for catching real errors in production instead of finding out from an ang
 
 ### Stripe for payments
 
-
-
 ### Current setup
 
 - Files on github
@@ -107,57 +105,11 @@ setting it up on checklocalfirstgmail so no problems there
 
 ### Important things to not forget
 
-- Ensure no hardcodings in backend routes or frontend routes
-
-- Ensure all accounts and emails with software are linked to checklocalfirst
-
-- Reset envs to ensure security
-
 - Make sure SENTRY_DSN is set in Render's env vars (not just locally) or error monitoring silently does nothing in production
 
 - Render's start command needs to be `npm start` (not just `node server.js`) since Sentry has to load before anything else does
 
 - If a new frontend domain ever gets added (staging, a new preview link, whatever) it has to get added to ALLOWED_ORIGINS in Render's env or it'll get blocked by CORS
 
-### Features built (Phase 2)
 
-Everything below is live and working, not just planned anymore:
-
-- Geolocation on businesses (lat/long/neighborhood), auto-filled through Nominatim/OpenStreetMap when an address is added or changed, with a backfill script for the businesses that existed before this
-
-- Pilot business flag/badge for internal tracking, admin can toggle it
-
-- Expanded business profile — website, owner bio, a 3-entry timeline (text + an optional photo per entry), and social links (facebook/instagram/yelp). Timeline is premium-tier only, everything else is open to both tiers
-
-- Businesses can belong to multiple categories now (separate from how individual services are tagged), and this is what search's category filter actually uses
-
-- Full business + admin dashboard parity — admin can edit basically every field on any business regardless of tier, not just approve/suspend
-
-- Reworked search — text search, category filter, and now real location/radius filtering with distance shown on results, plus a separate autocomplete/suggestions endpoint for the search bar
-
-- Photo upload wired up to supabase storage (business_photos table + an actual storage bucket) — currently admin-only, business self-upload is built but intentionally turned off so nothing inappropriate goes up without a review step
-
-- Discount system — businesses can create discounts, anyone can see the metadata on the business page, but only premium users (or business owners on a premium plan) can actually reveal the redemption code, tracked per-user so nobody can redeem the same code twice
-
-- Analytics tracking — anonymous click tracking on business pages (calls, page views, address clicks, website clicks, discount reveals), business owners and admin can both pull aggregated stats
-
-- Featured business + homepage carousel management, admin-controlled, both premium-tier only
-
-- Pagination on the bigger list routes (admin tables + search) so things don't fall over once there's actually a lot of businesses in the directory
-
-- Sentry error monitoring wired in, so a real crash in production shows up on a dashboard instead of nobody knowing until a business emails asking why something's broken
-
-- General hardening pass — locked down CORS to our real domains, fixed a missing RLS policy on business photos, cleaned up a redundant unpaid business-signup route, closed a gap that could've let someone redeem the same discount more than once, and fixed the backend to actually use Render's assigned port instead of a hardcoded one
-
-### Still on the list
-
-- No refresh tokens yet — sessions just expire after about an hour and force a re-login, fine for now but a rough edge later
-
-- No automated tests — everything's been tested manually against the actual frontend instead
-
-- Still need a real privacy policy and terms of service written up covering the location data, analytics, and discount redemption tracking now happening
-
-- Confirm supabase's backup/point-in-time recovery setup is actually something we can rely on if something ever goes wrong
-
-- Updated readme
 
