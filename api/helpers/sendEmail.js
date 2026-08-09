@@ -6,7 +6,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Falls back to Resend's shared test domain if RESEND_FROM_EMAIL isn't set yet,
 // so this doesn't hard-fail before the real sending domain is verified.
-const DEFAULT_FROM = process.env.RESEND_FROM_EMAIL || 'CheckLocalFirst <onboarding@resend.dev>';
+const DEFAULT_FROM = process.env.RESEND_FROM_EMAIL || 'CheckLocalFirst <hello@checklocalfirst.com>';
 
 /**
  * Sends a single email through Resend.

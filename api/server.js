@@ -28,8 +28,7 @@ import { AppError } from './helpers/AppError.js'
 const DEFAULT_ALLOWED_ORIGINS = [
     'https://www.checklocalfirst.com',
     'https://checklocalfirst.com',
-    'https://clf-frontend.vercel.app',
-    'https://clf-frontend-one.vercel.app/'
+    'https://clf-frontend-one.vercel.app'
 ];
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS
@@ -39,15 +38,8 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 const app = express()
 app.set('trust proxy', 1)
 
-// TEMPORARY — CORS wide open to any origin, allowlist check bypassed below.
-// The real allowlist logic (allowedOrigins, built above) is untouched and
-// still there waiting — revert this by deleting/commenting the early
-// `return callback(null, true)` right below so the real check runs again.
-// Don't leave this in for a real production launch.
 app.use(cors({
     origin: (origin, callback) => {
-        return callback(null, true); // TEMP: allow every origin, remove this line to revert
-
         // No Origin header at all means this isn't a browser request (server-to-
         // server, curl, Postman, the Stripe webhook, etc.) — CORS only ever
         // applies to browsers, so there's nothing to restrict here.
