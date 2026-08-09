@@ -176,22 +176,36 @@ router.get('/carousel', catchAsync(async (req, res) => {
 
 router.get('/:slug', validate(businessSlugParamSchema), catchAsync(async (req, res) => {
     const { slug } = req.validated.params;
-    const { data, error } = await supabase.from('businesses').select('*').eq('slug', slug).eq('status', 'approved').single();
+    const { data, error } = await supabase.from('businesses').select('*').eq('slug', slug).eq('status', 'approved').maybeSingle();
 
     if(error){
         throw new AppError(error.message, 500);
     }
 
+    if (!data) {
+        throw new AppError('Business not found', 404);
+    }
+
     res.json({ success: true, data });
 }))
 
+// Note: this lookup goes through the anon `supabase` client and has no
+// explicit status filter, but RLS on `businesses` restricts anon SELECTs to
+// status='approved' rows regardless — so a pending business's own dashboard
+// gets zero rows here too, not just the public page. See GET
+// /:slug/owner/services below for the ownership-verified equivalent that
+// bypasses RLS via supabaseAdmin.
 router.get('/:slug/services', validate(businessSlugParamSchema), catchAsync(async (req, res) => {
     const { slug } = req.validated.params;
 
-    const {data, error} = await supabase.from('businesses').select('id').eq('slug', slug).single();
+    const {data, error} = await supabase.from('businesses').select('id').eq('slug', slug).maybeSingle();
 
     if(error){
         throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Business not found', 404);
     }
 
     const businessId = data.id;
@@ -203,6 +217,23 @@ router.get('/:slug/services', validate(businessSlugParamSchema), catchAsync(asyn
     }
 
     return res.status(200).json({ success: true, data: businessData });
+}))
+
+// Owner-only twin of GET /:slug/services above — scoped through
+// verifyBusinessOwnership and read with supabaseAdmin (bypasses RLS) instead
+// of the anon client, so a pending business can load its own Services tab.
+router.get('/:slug/owner/services', authMiddleware, validate(businessSlugParamSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data, error } = await supabaseAdmin.from('services').select('*').eq('business_id', businessData.id);
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
 }))
 
 router.put('/:slug/services/:id', authMiddleware, validate(updateServiceSchema), catchAsync(async (req, res) => {
