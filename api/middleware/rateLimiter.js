@@ -4,7 +4,7 @@ import rateLimit from 'express-rate-limit';
 // General purpose — applies to most routes
 export const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // 100 requests per IP per window
+    max: 300, // 300 requests per IP per window
     standardHeaders: true,
     legacyHeaders: false,
     message: { success: false, error: 'Too many requests, please try again later.' }
