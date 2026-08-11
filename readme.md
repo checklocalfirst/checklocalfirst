@@ -103,7 +103,7 @@ Started off with wix but transfered to namecheap hosting,
 setting it up on checklocalfirstgmail so no problems there
 
 
-### Important things to not forget
+### Important things to not forget!
 
 - Make sure SENTRY_DSN is set in Render's env vars (not just locally) or error monitoring silently does nothing in production
 
