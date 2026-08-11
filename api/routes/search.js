@@ -3,6 +3,7 @@ import { supabase } from '../dbconnect.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
 import { parsePagination, buildPaginationMeta, paginateArray } from '../helpers/pagination.js';
+import { sortPremiumFirst } from '../helpers/sorting.js';
 
 const router = express.Router();
 
@@ -61,6 +62,10 @@ function groupBusinessesDirectly(businesses = [], distanceByBusinessId) {
 
     if (distanceByBusinessId) {
         grouped.sort((a, b) => (a.distance_miles ?? Infinity) - (b.distance_miles ?? Infinity));
+    } else {
+        // No location filter active — newest-first is the more useful default
+        // for a plain browse (by category, or truly everything) than raw DB order.
+        grouped.sort((a, b) => new Date(b.business.created_at) - new Date(a.business.created_at));
     }
 
     return grouped;
@@ -197,7 +202,10 @@ router.get('/', catchAsync(async (req, res) => {
             throw new AppError(error.message, 500);
         }
 
-        const groupedDirect = groupBusinessesDirectly(data, distanceByBusinessId);
+        const groupedDirect = sortPremiumFirst(
+            groupBusinessesDirectly(data, distanceByBusinessId),
+            (result) => result.business.business_tier
+        );
 
         return res.json({
             success: true,
@@ -296,7 +304,7 @@ router.get('/', catchAsync(async (req, res) => {
         data = data.filter((service) => distanceByBusinessId.has(service.business_id));
     }
 
-    const grouped = groupServicesByBusiness(data);
+    let grouped = groupServicesByBusiness(data);
 
     if (distanceByBusinessId) {
         for (const group of grouped) {
@@ -304,6 +312,11 @@ router.get('/', catchAsync(async (req, res) => {
         }
         grouped.sort((a, b) => (a.distance_miles ?? Infinity) - (b.distance_miles ?? Infinity));
     }
+
+    // Premium first, stable — preserves whatever ordering the block above
+    // already produced (distance asc, or the text/fuzzy match order) within
+    // each tier.
+    grouped = sortPremiumFirst(grouped, (group) => group.business.business_tier);
 
     return res.json({
         success: true,

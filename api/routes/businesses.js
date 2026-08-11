@@ -14,6 +14,7 @@ import { geocodeAddress, addressFieldsChanged } from '../helpers/geocode.js';
 import { deleteBusinessPhotoFile } from '../helpers/photoStorage.js';
 import { trackLimiter, redeemLimiter } from '../middleware/rateLimiter.js';
 import { aggregateEventsByTypeAndDay } from '../helpers/analytics.js';
+import { sortPremiumFirst } from '../helpers/sorting.js';
 import {
     businessSlugParamSchema,
     updateBusinessSchema,
@@ -122,13 +123,19 @@ function assertPremiumFieldsAllowed(body, businessTier) {
 // }
 
 router.get('/', catchAsync(async (req, res) => {
-    const { data, error} = await supabase.from('businesses').select('*').eq('status', 'approved');
+    const { data, error} = await supabase
+        .from('businesses')
+        .select('*')
+        .eq('status', 'approved')
+        .order('created_at', { ascending: false });
 
     if(error){
         throw new AppError(error.message, 500);
     }
 
-    res.json({ success: true, data });
+    // Premium first, newest-first within each tier (see /search's browse
+    // path for the same convention).
+    res.json({ success: true, data: sortPremiumFirst(data, (business) => business.business_tier) });
 }))
 
 router.get('/me', authMiddleware, catchAsync(async (req, res) => {
