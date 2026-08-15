@@ -8,6 +8,7 @@ import authRouter from './routes/auth.js'
 import favoriteRouter from './routes/favorites.js'
 import adminRouter from './routes/admin.js'
 import landingRouter from './routes/signups.js'
+import newsletterRouter from './routes/newsletter.js'
 import stripeRouter from './routes/stripe.js'
 import cors from 'cors'
 import { errorHandler } from './middleware/errorHandler.js'
@@ -69,6 +70,7 @@ app.use('/auth', authRouter)
 app.use('/favorites', favoriteRouter)
 app.use('/admin', adminRouter)
 app.use('/landing', landingRouter)
+app.use('/newsletter', newsletterRouter)
 app.use('/stripe', stripeRouter)
 
 app.use((req, res, next) => {

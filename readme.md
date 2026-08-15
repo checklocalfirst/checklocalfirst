@@ -69,47 +69,20 @@ Sentry for catching real errors in production instead of finding out from an ang
 
 ## Project Tech Stack breakdown
 
-### Next.js and TS frontend
-
-### Render on the backend hosting a express server for hosting API on checklocalfirst.render.com for managing all API requests
-
-### Resend for email sending and confirmation emails, will work in unison with supabase and render and namecheap dns
-
-### Supabase is postgresql relational database for holding all the data for API use to show on frontend also supports user auth and can use a smtp for email through resend
-
-### Stripe for payments
-
 ### Current setup
 
 - Files on github
-When finished with internship allow github to be accessed or transfer ownership over to 
-checklocalfirst@gmail.com
 
-- API on onrender
-Currently on my email but will setup on checklocalfirst@gmail.com email
-simply use this api file
-configure envs to match what the code says
-Buy the cheapest plan to ensure 0 api downtime for website 7.99
-
+- API on render
 
 - Frontend on vercel
-Original frontend host was wix, we changed to vercel and next.js react framework with html css, js, etc
-Transfer email to checklocalfirst@gmail.com on vercel
-Also changed to use namecheap
 
+- DNS host is namecheap
 
-- DNS host
-Started off with wix but transfered to namecheap hosting, 
-setting it up on checklocalfirstgmail so no problems there
+- Error monitoring on sentry
 
+- Payment handling on stripe
 
-### Important things to not forget!
+- Database on supabase
 
-- Make sure SENTRY_DSN is set in Render's env vars (not just locally) or error monitoring silently does nothing in production
-
-- Render's start command needs to be `npm start` (not just `node server.js`) since Sentry has to load before anything else does
-
-- If a new frontend domain ever gets added (staging, a new preview link, whatever) it has to get added to ALLOWED_ORIGINS in Render's env or it'll get blocked by CORS
-
-
-
+- Email service on resend
