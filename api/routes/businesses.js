@@ -181,9 +181,24 @@ router.get('/carousel', catchAsync(async (req, res) => {
     res.json({ success: true, data });
 }))
 
+// Joined to users for the owner's first_name (e.g. "Message [name]" /
+// "Owned by [name]" on the public page). This has to go through
+// `supabaseAdmin`, not the anon `supabase` client used elsewhere in this
+// file — `users` got no SELECT policy in the Aug 1, 2026 RLS rollout (same
+// deny-all-by-default gap migration 018 called out for business_categories),
+// so an anon-client join here would just come back as `users: null` instead
+// of erroring. The select only asks for first_name, never last_name/email/
+// phone, so switching clients doesn't widen what this public route exposes —
+// and the explicit .eq('status', 'approved') below (not RLS) is what keeps
+// unapproved businesses out now that the query runs as service-role.
 router.get('/:slug', validate(businessSlugParamSchema), catchAsync(async (req, res) => {
     const { slug } = req.validated.params;
-    const { data, error } = await supabase.from('businesses').select('*').eq('slug', slug).eq('status', 'approved').maybeSingle();
+    const { data, error } = await supabaseAdmin
+        .from('businesses')
+        .select('*, users(first_name)')
+        .eq('slug', slug)
+        .eq('status', 'approved')
+        .maybeSingle();
 
     if(error){
         throw new AppError(error.message, 500);
@@ -196,11 +211,12 @@ router.get('/:slug', validate(businessSlugParamSchema), catchAsync(async (req, r
     res.json({ success: true, data });
 }))
 
-// Note: this lookup goes through the anon `supabase` client and has no
-// explicit status filter, but RLS on `businesses` restricts anon SELECTs to
-// status='approved' rows regardless — so a pending business's own dashboard
-// gets zero rows here too, not just the public page. See GET
-// /:slug/owner/services below for the ownership-verified equivalent that
+// Note: GET /:slug/services below still goes through the anon `supabase`
+// client and has no explicit status filter, but RLS on `businesses`
+// restricts anon SELECTs to status='approved' rows regardless — so a
+// pending business's own dashboard gets zero rows here too, not just the
+// public page. See GET /:slug/owner/services below for the
+// ownership-verified equivalent that
 // bypasses RLS via supabaseAdmin.
 router.get('/:slug/services', validate(businessSlugParamSchema), catchAsync(async (req, res) => {
     const { slug } = req.validated.params;

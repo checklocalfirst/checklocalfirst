@@ -69,7 +69,7 @@ Check for the presence of `data`/`success` rather than assuming `success` is alw
 All approved businesses. Full object per row — every column described in §5 below (profile fields, tier, featured/carousel flags, geolocation, everything).
 
 ### GET `/businesses/:slug`
-Single approved business by slug. 404 if not found or not approved.
+Single approved business by slug. 404 if not found or not approved. Now also embeds the owner's first name: `data.users: { first_name }` (same nested-object shape as `GET /services`' `businesses: { name, slug }` below). `users` can be `null` if the business has no `owner_user_id` set.
 
 ### GET `/businesses/featured`
 Returns **one object or `null`** (not an array) — only one business can be featured at a time. Good for a homepage hero slot.
