@@ -119,6 +119,15 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
     } else if (setupIntent) {
         clientSecret = setupIntent.client_secret;
         mode = 'setup';
+
+        // Stamps this SetupIntent so stripeWebhook.js's setup_intent.succeeded
+        // handler can recognize it as a business signup and find the
+        // subscription it belongs to, without having to list/search for it —
+        // the SetupIntent object itself has no built-in link back to the
+        // subscription that spawned it.
+        await stripe.setupIntents.update(setupIntent.id, {
+            metadata: { signup_type: 'business', subscription_id: subscription.id },
+        });
     } else {
         // Shouldn't happen — Stripe always returns one or the other when
         // save_default_payment_method is set — but fail loudly instead of
