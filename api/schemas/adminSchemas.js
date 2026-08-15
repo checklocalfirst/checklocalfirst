@@ -183,6 +183,24 @@ export const updatePhotoApprovalSchema = z.object({
     approved: z.boolean(),
   }),
 });
+// Admin create — nested under business id (like adminUploadPhotoSchema),
+// unlike adminUpdateServiceSchema/adminServiceIdParamSchema below which key
+// off the service's own id since a service already exists by the time those
+// run. category_id is required here (no existing service row to fall back
+// to); the route surfaces a 400 if it doesn't reference a real category
+// rather than letting the FK violation bubble up as a raw 500.
+export const adminCreateServiceSchema = z.object({
+  query: z.object({}).optional(),
+  params: z.object({
+    id: z.coerce.number().int().positive('Invalid business id'),
+  }),
+  body: z.object({
+    name: z.string().min(1, 'Service name is required').max(100),
+    description: z.string().optional(),
+    category_id: z.coerce.number().int().positive('category_id is required'),
+  }),
+});
+
 export const adminServiceIdParamSchema = z.object({
   body: z.object({}).optional(),
   query: z.object({}).optional(),

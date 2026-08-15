@@ -8,6 +8,7 @@ import {
     updateBusinessStatusSchema,
     adminServiceIdParamSchema,
     adminUpdateServiceSchema,
+    adminCreateServiceSchema,
     adminUpdateBusinessSchema,
     updatePilotStatusSchema,
     adminUpdateBusinessCategoriesSchema,
@@ -951,6 +952,40 @@ router.delete('/users/:id', validate(userIdParamSchema), catchAsync(async (req, 
 
 
 // SERVICES
+
+// Admin create — nested under business id, no ownership check (admin can add
+// a service to any business, same override pattern as the photo upload route
+// above). Mirrors POST /:slug/services in businesses.js (the owner's
+// self-service version), just keyed by business id instead of slug+ownership.
+router.post('/businesses/:id/services', validate(adminCreateServiceSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+    const { name, description, category_id } = req.validated.body;
+
+    const { data: business, error: businessError } = await supabaseAdmin
+        .from('businesses')
+        .select('id')
+        .eq('id', id)
+        .single();
+
+    if (businessError || !business) {
+        throw new AppError('Business not found', 404);
+    }
+
+    const { data, error } = await supabaseAdmin
+        .from('services')
+        .insert({ business_id: id, name, description, category_id })
+        .select()
+        .single();
+
+    if (error) {
+        if (error.code === '23503') {
+            throw new AppError('Invalid category_id', 400);
+        }
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(201).json({ success: true, message: 'Service added', data });
+}))
 
 router.get('/services', catchAsync(async (req, res) => {
     const { page, limit, from, to } = parsePagination(req.query);
