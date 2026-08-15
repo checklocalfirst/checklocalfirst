@@ -80,16 +80,57 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
         items: [{ price: priceId }],
         payment_behavior: 'default_incomplete',
         payment_settings: { save_default_payment_method: 'on_subscription' },
-        expand: ['latest_invoice.confirmation_secret'],
+        // pending_setup_intent covers the case below (confirmation_secret comes
+        // back null) — Stripe only populates it when we ask for it explicitly.
+        expand: ['latest_invoice.confirmation_secret', 'pending_setup_intent'],
         ...(promotionCodeId ? { discounts: [{ promotion_code: promotionCodeId }] } : {}),
     });
 
-    const clientSecret = subscription.latest_invoice.confirmation_secret.client_secret;
+    // A coupon that fully discounts the first invoice (e.g. a 100%-off pilot
+    // code, or an "N months free" code where the first invoice lands inside
+    // the free window) means Stripe has nothing to charge right now — it
+    // auto-finalizes and pays that $0 invoice itself and never creates a
+    // PaymentIntent for it, so latest_invoice.confirmation_secret comes back
+    // null (this was crashing the route outright — Sentry event
+    // 078150342aa44bde8ccea479f4edcd5f, triggered by a "PILOTBUSINESS" coupon).
+    //
+    // Because payment_settings.save_default_payment_method is set to
+    // 'on_subscription', Stripe creates a SetupIntent (pending_setup_intent)
+    // in that situation instead — this is what lets the frontend still
+    // collect and save a card with $0 moving today. Once the frontend
+    // confirms that SetupIntent, Stripe attaches the card as the
+    // subscription's default payment method, so billing starts automatically
+    // — no separate charge, no extra code here — the moment the coupon's free
+    // period (or duration) runs out and a real invoice comes due.
+    //
+    // `mode` tells the frontend which Stripe.js confirmation call to make:
+    // stripe.confirmPayment() for 'payment' (the normal, immediately-charged
+    // path), or stripe.confirmSetup() for 'setup' (card-on-file, nothing
+    // charged yet).
+    const confirmationSecret = subscription.latest_invoice?.confirmation_secret;
+    const setupIntent = subscription.pending_setup_intent;
+
+    let clientSecret;
+    let mode;
+
+    if (confirmationSecret) {
+        clientSecret = confirmationSecret.client_secret;
+        mode = 'payment';
+    } else if (setupIntent) {
+        clientSecret = setupIntent.client_secret;
+        mode = 'setup';
+    } else {
+        // Shouldn't happen — Stripe always returns one or the other when
+        // save_default_payment_method is set — but fail loudly instead of
+        // silently sending the frontend a signup with no way to collect a card.
+        throw new AppError('Unable to start checkout — no payment or setup step returned by Stripe', 500);
+    }
 
     return res.status(200).json({
         success: true,
         data: {
             client_secret: clientSecret,
+            mode,
             customer_id: customer.id,
             discount_applied: Boolean(promotionCodeId),
         }
