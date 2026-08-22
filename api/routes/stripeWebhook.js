@@ -57,28 +57,55 @@ async function provisionBusinessAccount(customer, customerId, subscriptionId) {
         zip: metadata.business_zip
     });
 
-    const { error: businessError } = await supabaseAdmin.from('businesses').insert({
-        owner_user_id: authData.user.id,
-        name: metadata.business_name,
-        description: metadata.business_description,
-        address: metadata.business_address,
-        city: metadata.business_city,
-        state: metadata.business_state,
-        zip: metadata.business_zip,
-        phone: metadata.business_phone,
-        email: customer.email,
-        slug: slug,
-        business_tier: metadata.business_tier,
-        stripe_customer_id: customerId,
-        stripe_subscription_id: subscriptionId,
-        latitude: geocoded?.latitude ?? null,
-        longitude: geocoded?.longitude ?? null,
-        neighborhood: geocoded?.neighborhood ?? null,
-        geocoded_at: geocoded ? new Date().toISOString() : null
-    });
+    const { data: newBusiness, error: businessError } = await supabaseAdmin
+        .from('businesses')
+        .insert({
+            owner_user_id: authData.user.id,
+            name: metadata.business_name,
+            description: metadata.business_description,
+            address: metadata.business_address,
+            city: metadata.business_city,
+            state: metadata.business_state,
+            zip: metadata.business_zip,
+            phone: metadata.business_phone,
+            email: customer.email,
+            slug: slug,
+            business_tier: metadata.business_tier,
+            stripe_customer_id: customerId,
+            stripe_subscription_id: subscriptionId,
+            latitude: geocoded?.latitude ?? null,
+            longitude: geocoded?.longitude ?? null,
+            neighborhood: geocoded?.neighborhood ?? null,
+            geocoded_at: geocoded ? new Date().toISOString() : null
+        })
+        .select('id')
+        .single();
 
     if (businessError) {
         throw new AppError(businessError.message, 500);
+    }
+
+    // Every new business starts with a standing "10% off one item" welcome
+    // discount (WELCOME10). Wrapped in its own try/catch for the same reason
+    // as the password-setup email below: the user and business rows are
+    // already committed above, and throwing here would just make Stripe retry
+    // the whole event, which lands in the existingBusiness branch and never
+    // re-attempts this insert. Logged for manual follow-up instead.
+    try {
+        const { error: discountError } = await supabaseAdmin.from('discounts').insert({
+            business_id: newBusiness.id,
+            code: 'WELCOME10',
+            description: '10% off one item',
+            discount_type: 'percent',
+            value: 10,
+            active: true
+        });
+
+        if (discountError) {
+            throw discountError;
+        }
+    } catch (discountErr) {
+        console.error(`Failed to create welcome discount for business ${newBusiness.id}:`, discountErr);
     }
 
     // createUser above sets a random password nobody knows — this is the only way
