@@ -10,6 +10,21 @@ const router = express.Router();
 // How many distinct names /suggestions returns at most.
 const SUGGESTION_LIMIT = 8;
 
+// Generic "just show me what's out there" terms — a query that's only one of
+// these isn't a real text search, so it skips straight to the same
+// browse-everything path used when `q` is absent, respecting whatever
+// category/location filters are also active.
+const GENERIC_BROWSE_TERMS = new Set([
+    'business', 'businesses',
+    'shop', 'shops',
+    'store', 'stores',
+    'local',
+    'service', 'services',
+    'near me', 'nearby',
+    'all', 'everything', 'anything',
+    'directory'
+]);
+
 function groupServicesByBusiness(services = []) {
     const groupedBusinesses = new Map();
 
@@ -93,7 +108,13 @@ router.get('/', catchAsync(async (req, res) => {
             ? req.query.category.trim()
             : '';
 
-    const hasQuery = searchQuery.length > 0;
+    // hadRawQuery tracks "did the user type anything at all" — used for the
+    // nothing-provided guard below. hasQuery tracks "should we run real text
+    // search," which a generic term opts back out of even though it counts
+    // as raw input (see GENERIC_BROWSE_TERMS above).
+    const hadRawQuery = searchQuery.length > 0;
+    const isGenericBrowseTerm = hadRawQuery && GENERIC_BROWSE_TERMS.has(searchQuery.toLowerCase());
+    let hasQuery = hadRawQuery && !isGenericBrowseTerm;
 
     // Distance filtering only activates when lat, lng, AND radius_miles are all
     // present and sane — a partial/malformed set of location params is treated
@@ -113,7 +134,7 @@ router.get('/', catchAsync(async (req, res) => {
             Number.isFinite(radiusMiles) && radiusMiles > 0;
     }
 
-    if (!hasQuery && !category && !hasLocation) {
+    if (!hadRawQuery && !category && !hasLocation) {
         return res.json({ success: true, data: [], pagination: buildPaginationMeta({ ...pagination, total: 0 }) });
     }
 
@@ -148,6 +169,41 @@ router.get('/', catchAsync(async (req, res) => {
 
         if (categoryBusinessIds.length === 0) {
             return res.json({ success: true, data: [], pagination: buildPaginationMeta({ ...pagination, total: 0 }) });
+        }
+    }
+
+    // If the free-text query itself names a category ("plumbing") and no
+    // explicit ?category= filter is already active, treat it as browsing
+    // that category rather than running text search against service
+    // names/descriptions — there's rarely a service literally named after
+    // its own category, so that search would otherwise come back empty.
+    if (hasQuery && categoryBusinessIds === null) {
+        const { data: matchedCategory, error: categoryMatchError } = await supabase
+            .from('categories')
+            .select('id')
+            .ilike('name', searchQuery)
+            .maybeSingle();
+
+        if (categoryMatchError) {
+            throw new AppError(categoryMatchError.message, 500);
+        }
+
+        if (matchedCategory) {
+            const { data: taggedBusinesses, error: taggedError } = await supabase
+                .from('business_categories')
+                .select('business_id')
+                .eq('category_id', matchedCategory.id);
+
+            if (taggedError) {
+                throw new AppError(taggedError.message, 500);
+            }
+
+            categoryBusinessIds = taggedBusinesses.map((row) => row.business_id);
+            hasQuery = false;
+
+            if (categoryBusinessIds.length === 0) {
+                return res.json({ success: true, data: [], pagination: buildPaginationMeta({ ...pagination, total: 0 }) });
+            }
         }
     }
 
@@ -275,21 +331,23 @@ router.get('/', catchAsync(async (req, res) => {
 
         const ids = fuzzyIds.map((result) => result.id);
 
-        if (ids.length === 0) {
-            return res.json({ success: true, data: [], pagination: buildPaginationMeta({ ...pagination, total: 0 }) });
+        // Note: no early-return-on-empty here anymore — a zero-result fuzzy
+        // pass on services no longer means the whole search came up empty,
+        // since the business-name pass below still gets a chance to match
+        // (e.g. the query is a business's own name, not any service's).
+        if (ids.length > 0) {
+            let fuzzyBusinessQuery = supabase
+                .from('services')
+                .select('*, businesses!inner(*)')
+                .in('id', ids)
+                .eq('businesses.status', 'approved');
+
+            if (categoryBusinessIds !== null) {
+                fuzzyBusinessQuery = fuzzyBusinessQuery.in('business_id', categoryBusinessIds);
+            }
+
+            ({ data, error } = await fuzzyBusinessQuery);
         }
-
-        let fuzzyBusinessQuery = supabase
-            .from('services')
-            .select('*, businesses!inner(*)')
-            .in('id', ids)
-            .eq('businesses.status', 'approved');
-
-        if (categoryBusinessIds !== null) {
-            fuzzyBusinessQuery = fuzzyBusinessQuery.in('business_id', categoryBusinessIds);
-        }
-
-        ({ data, error } = await fuzzyBusinessQuery);
     }
 
     if (error) {
@@ -310,6 +368,63 @@ router.get('/', catchAsync(async (req, res) => {
         for (const group of grouped) {
             group.distance_miles = distanceByBusinessId.get(group.business.id) ?? null;
         }
+    }
+
+    // Business-level match — catches a search for the business's own name or
+    // description (e.g. "Joe's Cleaning") that wouldn't turn up in any of its
+    // services' names/descriptions, via businesses.search_vector (see
+    // migration 034_add_business_search_vector.sql). Runs regardless of
+    // whether the services-side passes above found anything, and only *adds*
+    // businesses those passes missed — a business that already matched via a
+    // service keeps its matchingServices scoped to the actual match rather
+    // than being widened to everything it offers.
+    let businessQuery = supabase
+        .from('businesses')
+        .select('*, services(*)')
+        .textSearch('search_vector', formattedQuery)
+        .eq('status', 'approved');
+
+    if (categoryBusinessIds !== null) {
+        businessQuery = businessQuery.in('id', categoryBusinessIds);
+    }
+
+    let { data: businessData, error: businessError } = await businessQuery;
+
+    if (businessError) {
+        throw new AppError(businessError.message, 500);
+    }
+
+    // Partial-name fallback, same reasoning as the services ILIKE fallback above.
+    if (businessData.length === 0) {
+        let businessFallbackQuery = supabase
+            .from('businesses')
+            .select('*, services(*)')
+            .ilike('name', `%${searchQuery}%`)
+            .eq('status', 'approved');
+
+        if (categoryBusinessIds !== null) {
+            businessFallbackQuery = businessFallbackQuery.in('id', categoryBusinessIds);
+        }
+
+        ({ data: businessData, error: businessError } = await businessFallbackQuery);
+    }
+
+    if (businessError) {
+        throw new AppError(businessError.message, 500);
+    }
+
+    const matchedBusinessIds = new Set(grouped.map((group) => group.business.id));
+    let businessOnlyMatches = businessData.filter((business) => !matchedBusinessIds.has(business.id));
+
+    if (distanceByBusinessId) {
+        businessOnlyMatches = businessOnlyMatches.filter((business) => distanceByBusinessId.has(business.id));
+    }
+
+    if (businessOnlyMatches.length > 0) {
+        grouped = grouped.concat(groupBusinessesDirectly(businessOnlyMatches, distanceByBusinessId));
+    }
+
+    if (distanceByBusinessId) {
         grouped.sort((a, b) => (a.distance_miles ?? Infinity) - (b.distance_miles ?? Infinity));
     }
 
