@@ -71,6 +71,8 @@ All approved businesses. Full object per row — every column described in §5 b
 ### GET `/businesses/:slug`
 Single approved business by slug. 404 if not found or not approved. Now also embeds the owner's first name: `data.users: { first_name }` (same nested-object shape as `GET /services`' `businesses: { name, slug }` below). `users` can be `null` if the business has no `owner_user_id` set.
 
+`data.hours` is the business's Sunday-Saturday hours object (see §5's `PUT /businesses/:slug/hours` for the shape) — `null` if the business hasn't set hours yet. Render that as "hours not listed," not as closed every day.
+
 ### GET `/businesses/featured`
 Returns **one object or `null`** (not an array) — only one business can be featured at a time. Good for a homepage hero slot.
 
@@ -195,6 +197,13 @@ Partial update, all fields optional:
 
 ### PUT `/businesses/:slug/categories` — replace-all semantics
 Body: `{ category_ids: [1, 2, 3] }` — this becomes the business's complete category set (min 1, max 20). Build as a multi-select against `GET /categories`. A business must always keep at least one category, since `business_categories` is what drives `/search`'s category filter now.
+
+### PUT `/businesses/:slug/hours` — replace-all semantics, all seven days required every time
+Body must have all seven keys — `sunday`, `monday`, `tuesday`, `wednesday`, `thursday`, `friday`, `saturday` — every request, even if only one day actually changed (build the form so it always holds the full week in state). Each day is either:
+- `{ "closed": true }`, or
+- `{ "closed": false, "open": "09:00", "close": "17:00" }` — `open`/`close` are `"HH:MM"` 24-hour strings, `open` must be earlier than `close`. Overnight hours that cross midnight (e.g. a bar open 18:00–02:00) aren't supported yet — reject those client-side with a clear message rather than letting the user submit and hit a 400.
+
+Available at both tiers, not premium-gated. Returns the saved `hours` object as `data`. There's no separate `GET /businesses/:slug/hours` — the dashboard should prefill this form from `GET /businesses/me`'s `hours` field (same shape), and the public page reads it off `GET /businesses/:slug`'s `hours` field (see §1).
 
 ### Services (ownership-enforced)
 - `POST /businesses/:slug/services` — body: `name` (1–100), `description` (optional), `category_id` (required — populate the select from `GET /categories`).

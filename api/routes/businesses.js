@@ -19,6 +19,7 @@ import {
     businessSlugParamSchema,
     updateBusinessSchema,
     updateBusinessCategoriesSchema,
+    updateBusinessHoursSchema,
     createServiceSchema,
     updateServiceSchema,
     serviceIdParamSchema,
@@ -433,6 +434,34 @@ router.get('/:slug/owner/categories', authMiddleware, validate(businessSlugParam
     }
 
     return res.status(200).json({ success: true, data: data.map((row) => row.categories) });
+}))
+
+// Replace-all semantics, same reasoning as /:slug/categories above — a
+// weekly-hours editor naturally holds all seven days in its form state
+// regardless of what actually changed, so there's no meaningful partial
+// update to support. Available at both tiers — hours aren't premium-gated.
+// The stored shape is validated entirely by updateBusinessHoursSchema; see
+// its comments for the day/time format. No GET /:slug/hours route exists
+// (or is needed) — `hours` rides along automatically in every route that
+// already does `select('*')` on businesses (GET /businesses, GET
+// /businesses/:slug, GET /businesses/me).
+router.put('/:slug/hours', authMiddleware, validate(updateBusinessHoursSchema), catchAsync(async (req, res) => {
+    const { slug } = req.validated.params;
+
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const { data, error } = await supabaseAdmin
+        .from('businesses')
+        .update({ hours: req.validated.body })
+        .eq('id', businessData.id)
+        .select('hours')
+        .single();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, message: 'Business hours updated', data: data.hours });
 }))
 
 // Business self-service photo upload/reorder/delete — disabled per Justyce's call:

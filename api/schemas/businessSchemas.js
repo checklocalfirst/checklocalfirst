@@ -56,6 +56,51 @@ export const updateBusinessSchema = z.object({
   }),
 });
 
+// Sunday-Saturday, always all seven — same "replace-all" convention as
+// category_ids below, since a weekly-hours editor naturally holds all seven
+// days in state anyway (there's no meaningful "just update Tuesday" request
+// from a form like that). Times are "HH:MM" 24-hour, in the business's own
+// local time — no timezone conversion happens server-side. Overnight hours
+// that cross midnight (e.g. a bar open 18:00-02:00) aren't supported yet —
+// close must be later than open within the same day.
+export const DAY_KEYS = [
+  'sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday',
+];
+
+const timeString = z
+  .string()
+  .regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Time must be in HH:MM 24-hour format (e.g. "09:00")');
+
+const daySchema = z
+  .object({
+    closed: z.boolean(),
+    open: timeString.optional(),
+    close: timeString.optional(),
+  })
+  .refine(
+    (day) => day.closed || (day.open !== undefined && day.close !== undefined && day.open < day.close),
+    {
+      message:
+        'open and close are both required when closed is false, and open must be earlier than close',
+      path: ['open'],
+    }
+  );
+
+const hoursShape = {};
+for (const day of DAY_KEYS) {
+  hoursShape[day] = daySchema;
+}
+
+export const updateBusinessHoursSchema = z.object({
+  query: z.object({}).optional(),
+  params: z.object({
+    slug: slugParam,
+  }),
+  // .strict() — reject unknown day keys (typos, non-day strings) rather than
+  // silently ignoring them and leaving that day unset.
+  body: z.object(hoursShape).strict(),
+});
+
 export const updateBusinessCategoriesSchema = z.object({
   query: z.object({}).optional(),
   params: z.object({

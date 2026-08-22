@@ -1,0 +1,30 @@
+-- 035: business hours (Sunday-Saturday), settable by the business owner from
+-- their dashboard and shown on the business's public page.
+--
+-- Stored as a single JSONB column rather than a separate table — a business
+-- has exactly one row per day, always all seven, with no history/versioning
+-- need. Same reasoning that put the timeline fields directly on `businesses`
+-- as columns instead of a child table (see schema for timeline_year_1/2/3
+-- etc.), just as one JSON column instead of 21 flat ones since "day of week"
+-- isn't a fixed set of named columns the way "timeline slot 1/2/3" is.
+--
+-- NULL means "hasn't set hours yet" — treat that as "not provided" wherever
+-- this is displayed, not as "closed every day."
+--
+-- Shape (validated server-side by updateBusinessHoursSchema in
+-- api/schemas/businessSchemas.js — this column itself has no CHECK
+-- constraint enforcing it):
+-- {
+--   "sunday":    { "closed": true },
+--   "monday":    { "closed": false, "open": "09:00", "close": "17:00" },
+--   "tuesday":   { "closed": false, "open": "09:00", "close": "17:00" },
+--   "wednesday": { "closed": false, "open": "09:00", "close": "17:00" },
+--   "thursday":  { "closed": false, "open": "09:00", "close": "17:00" },
+--   "friday":    { "closed": false, "open": "09:00", "close": "17:00" },
+--   "saturday":  { "closed": true }
+-- }
+-- Times are "HH:MM" 24-hour, in the business's own local time — no timezone
+-- conversion happens server-side. Overnight hours that cross midnight (e.g.
+-- a bar open 18:00-02:00) aren't supported yet — close must be later than
+-- open within the same day.
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS hours JSONB;
