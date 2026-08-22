@@ -12,6 +12,25 @@ import { sendEmail } from '../helpers/sendEmail.js';
 
 const router = express.Router();
 
+// Customer-facing codes are Stripe Promotion Codes (e.g. "FRIENDS3"), not raw
+// Coupon IDs — resolve the typed code to its promotion code object before
+// it's ever used, so a bad code fails clearly here instead of surfacing as a
+// confusing error from subscription creation. Shared by business signup and
+// premium-user checkout below — same lookup either way.
+async function resolvePromotionCode(couponCode) {
+    if (!couponCode) {
+        return undefined;
+    }
+
+    const promotionCodes = await stripe.promotionCodes.list({ code: couponCode, active: true, limit: 1 });
+
+    if (promotionCodes.data.length === 0) {
+        throw new AppError('Invalid or expired coupon code', 400);
+    }
+
+    return promotionCodes.data[0].id;
+}
+
 router.get('/', catchAsync(async (req, res) => {
     return res.status(200).json({ success: true, message: 'Stripe route' });
 }))
@@ -39,19 +58,7 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
         throw new AppError('An account with this phone number already exists', 409);
     }
 
-    // Customer-facing codes are Stripe Promotion Codes (e.g. "FRIENDS3"), not raw Coupon IDs —
-    // resolve the typed code to its promotion code object before it's ever used, so a bad code
-    // fails clearly here instead of surfacing as a confusing error from subscription creation.
-    let promotionCodeId;
-    if (coupon_code) {
-        const promotionCodes = await stripe.promotionCodes.list({ code: coupon_code, active: true, limit: 1 });
-
-        if (promotionCodes.data.length === 0) {
-            throw new AppError('Invalid or expired coupon code', 400);
-        }
-
-        promotionCodeId = promotionCodes.data[0].id;
-    }
+    const promotionCodeId = await resolvePromotionCode(coupon_code);
 
     const priceId = business_tier === 'premium'
         ? process.env.STRIPE_PREMIUM_BUSINESS_PRICE
@@ -146,8 +153,9 @@ router.post('/signup/business/checkout', validate(businessCheckoutSchema), catch
     });
 }))
 
-// routes/stripe.js — add this route
 router.post('/premium-user/checkout', authMiddleware, validate(premiumUserCheckoutSchema), catchAsync(async (req, res) => {
+    const { coupon_code } = req.validated.body ?? {};
+
     const { data: userData, error: userError } = await supabaseAdmin
         .from('users')
         .select('email, first_name, last_name, is_premium, stripe_customer_id')
@@ -161,6 +169,8 @@ router.post('/premium-user/checkout', authMiddleware, validate(premiumUserChecko
     if (userData.is_premium) {
         throw new AppError('You already have premium access', 409);
     }
+
+    const promotionCodeId = await resolvePromotionCode(coupon_code);
 
     // Reuse existing Stripe customer if one exists (e.g. from a prior attempt), otherwise create one
     let customerId = userData.stripe_customer_id;
@@ -182,16 +192,53 @@ router.post('/premium-user/checkout', authMiddleware, validate(premiumUserChecko
         items: [{ price: process.env.STRIPE_PREMIUM_USER_PRICE }],
         payment_behavior: 'default_incomplete',
         payment_settings: { save_default_payment_method: 'on_subscription' },
-        expand: ['latest_invoice.confirmation_secret'],
+        // pending_setup_intent covers the same $0-invoice case documented in
+        // POST /signup/business/checkout above — a coupon that fully covers
+        // the first invoice means Stripe auto-finalizes/pays it before the
+        // frontend ever gets a card step, so latest_invoice.confirmation_secret
+        // comes back null. Same mode/confirmation-secret/setup-intent handling
+        // as that route, for the same reason.
+        expand: ['latest_invoice.confirmation_secret', 'pending_setup_intent'],
+        ...(promotionCodeId ? { discounts: [{ promotion_code: promotionCodeId }] } : {}),
     });
 
-    const clientSecret = subscription.latest_invoice.confirmation_secret.client_secret;
+    const confirmationSecret = subscription.latest_invoice?.confirmation_secret;
+    const setupIntent = subscription.pending_setup_intent;
+
+    let clientSecret;
+    let mode;
+
+    if (confirmationSecret) {
+        clientSecret = confirmationSecret.client_secret;
+        mode = 'payment';
+    } else if (setupIntent) {
+        clientSecret = setupIntent.client_secret;
+        mode = 'setup';
+
+        // Stamps this SetupIntent so stripeWebhook.js's setup_intent.succeeded
+        // handler can recognize it as a premium-user upgrade and find the
+        // subscription it belongs to — same reasoning as the business signup
+        // path above. user_id isn't stamped here since the webhook pulls it
+        // off the *customer's* metadata instead (set above / at signup),
+        // matching how the business path resolves everything through
+        // customer.metadata rather than the SetupIntent's own.
+        await stripe.setupIntents.update(setupIntent.id, {
+            metadata: { signup_type: 'user_premium', subscription_id: subscription.id },
+        });
+    } else {
+        // Shouldn't happen — Stripe always returns one or the other when
+        // save_default_payment_method is set — but fail loudly instead of
+        // silently sending the frontend a checkout with no way to collect a card.
+        throw new AppError('Unable to start checkout — no payment or setup step returned by Stripe', 500);
+    }
 
     return res.status(200).json({
         success: true,
         data: {
             client_secret: clientSecret,
+            mode,
             customer_id: customerId,
+            discount_applied: Boolean(promotionCodeId),
         }
     });
 }))

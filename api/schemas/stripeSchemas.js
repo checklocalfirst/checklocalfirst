@@ -20,9 +20,11 @@ export const businessCheckoutSchema = z.object({
   query: z.object({}).optional(),
 });
 
-// schemas/stripeSchemas.js — add this
 export const premiumUserCheckoutSchema = z.object({
-  body: z.object({}).optional(),
+  body: z.object({
+    // Same Promotion Code lookup as businessCheckoutSchema above.
+    coupon_code: z.string().min(1).optional(),
+  }).optional(),
   params: z.object({}).optional(),
   query: z.object({}).optional(),
 });

@@ -150,12 +150,12 @@ Auth: Bearer. No body.
 ## 3. Business Signup & Billing (Stripe)
 
 ### POST `/stripe/signup/business/checkout` — the real "become a business" signup form
-No auth. Body: `name`, `description` (optional), `address`, `email` (must not already exist — 409), `phone`, `state` (2-letter), `city`, `zip` (5-digit), `firstname`, `lastname`, `business_tier` (`basic`|`premium` — build as a plan picker), `coupon_code` (optional Stripe promotion code).
+No auth. Body: `name`, `description` (optional), `address`, `email` (must not already exist — 409), `phone`, `state` (2-letter), `city`, `zip` (5-digit), `firstname`, `lastname`, `business_tier` (`basic`|`premium` — build as a plan picker), `coupon_code` (optional Stripe promotion code — invalid/expired code returns 400 immediately, before any Stripe customer/subscription is created).
 
-Response `data`: `{ client_secret, customer_id, discount_applied }` — mount Stripe Elements with `client_secret`. **No password field** — the account is created by the backend webhook only after payment succeeds, and the owner sets their password via an emailed link (§6). Make this explicit in the UI: "check your email after payment to set up your login."
+Response `data`: `{ client_secret, mode, customer_id, discount_applied }`. **`mode` determines which Stripe.js call to make** — `'payment'` (the normal case) means call `stripe.confirmPayment()`; `'setup'` means call `stripe.confirmSetup()` instead. `mode` is `'setup'` specifically when a coupon fully covers the first invoice (e.g. a 100%-off or free-trial code) — Stripe has nothing to charge today, so instead of a payment this collects and saves a card on file for when the free period ends. Always branch on `mode` rather than assuming `'payment'` — a business without a coupon code always gets `'payment'`, but don't hardcode that assumption. **No password field** — the account is created by the backend webhook only after payment (or the setup step, for the coupon path) succeeds, and the owner sets their password via an emailed link (§6). Make this explicit in the UI: "check your email after payment to set up your login."
 
 ### POST `/stripe/premium-user/checkout`
-Auth: Bearer. No body. Upgrades a free user to premium. Response: `{ client_secret, customer_id }`, same Elements pattern.
+Auth: Bearer. Body: `coupon_code` (optional Stripe promotion code, same validation as business signup above). Upgrades a free user to premium. Response `data`: `{ client_secret, mode, customer_id, discount_applied }` — same `mode` branching as business signup above (`'payment'` vs `'setup'` for a coupon that fully covers the first period). Same Elements pattern either way.
 
 ### POST `/stripe/business/:slug/upgrade`
 Auth: Bearer, must own the business. No body. Basic → premium upgrade, charges the prorated difference immediately. Handle 409 ("already premium") and 402 (card declined) distinctly.

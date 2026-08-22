@@ -262,6 +262,17 @@ router.post('/', express.raw({ type: 'application/json' }), catchAsync(async (re
                 return res.status(200).json({ received: true });
             }
 
+            // Same reasoning as the business signup path above: a $0 invoice
+            // (a coupon that fully covers the first period) is auto-finalized
+            // and paid by Stripe before the frontend's card step ever runs.
+            // Flipping is_premium here would grant access before a card is
+            // actually saved for when the free period ends — that happens in
+            // the setup_intent.succeeded handler below instead, once the
+            // customer has confirmed a card to save.
+            if (invoiceObject.amount_paid === 0) {
+                return res.status(200).json({ received: true });
+            }
+
             const invoice = await stripe.invoices.retrieve(invoiceObject.id, {
                 expand: ['parent.subscription_details']
             });
@@ -369,6 +380,78 @@ router.post('/', express.raw({ type: 'application/json' }), catchAsync(async (re
                 });
             } catch (emailErr) {
                 console.error(`Failed to send signup-confirmation email to ${customer.email}:`, emailErr);
+            }
+        }
+
+        // Counterpart to the amount_paid === 0 guard in the user_premium branch
+        // of invoice.payment_succeeded above — this is what actually flips
+        // is_premium for a premium-user checkout whose first invoice was fully
+        // covered by a coupon. Fires once the customer has confirmed the
+        // SetupIntent on the frontend (routes/stripe.js's POST
+        // /premium-user/checkout, 'setup' mode), meaning a card is now on file
+        // as the subscription's default payment method.
+        else if (setupIntent.metadata?.signup_type === 'user_premium') {
+            const customerId = setupIntent.customer;
+
+            const customer = await stripe.customers.retrieve(customerId);
+            const userId = customer.metadata.user_id;
+
+            const { data: userData, error: fetchError } = await supabaseAdmin
+                .from('users')
+                .select('is_premium, first_name')
+                .eq('user_id', userId)
+                .single();
+
+            if (fetchError || !userData) {
+                throw new AppError('User not found for premium upgrade', 404);
+            }
+
+            // Same idempotency guard as invoice.payment_succeeded above — Stripe
+            // retries webhook deliveries, so a second delivery of this same
+            // event must not re-process the same upgrade.
+            if (userData.is_premium) {
+                return res.status(200).json({ received: true });
+            }
+
+            // Same fallback reasoning as the business branch above — the
+            // SetupIntent has no built-in link back to the subscription that
+            // spawned it, so routes/stripe.js stamps subscription_id into its
+            // metadata right after creating it; fall back to looking it up if
+            // that's ever missing.
+            let subscriptionId = setupIntent.metadata.subscription_id;
+
+            if (!subscriptionId) {
+                const subscriptions = await stripe.subscriptions.list({ customer: customerId, limit: 1 });
+                subscriptionId = subscriptions.data[0]?.id;
+            }
+
+            const { error: updateError } = await supabaseAdmin
+                .from('users')
+                .update({
+                    is_premium: true,
+                    stripe_customer_id: customerId,
+                    stripe_subscription_id: subscriptionId
+                })
+                .eq('user_id', userId);
+
+            if (updateError) {
+                throw new AppError(updateError.message, 500);
+            }
+
+            // No dollar amount to report here — nothing was charged today, same
+            // reasoning as the business signup confirmation email above.
+            try {
+                await sendEmail({
+                    to: customer.email,
+                    subject: 'Thanks for upgrading to CheckLocalFirst Premium',
+                    html: `
+                        <p>Hi ${userData.first_name || 'there'},</p>
+                        <p>Thanks for upgrading to Premium using your coupon code — nothing was charged today.</p>
+                        <p>Your account now has full access to premium features. We've saved your card on file, and billing will start automatically once your free period ends.</p>
+                    `
+                });
+            } catch (emailErr) {
+                console.error(`Failed to send premium-upgrade confirmation email to ${customer.email}:`, emailErr);
             }
         }
 
