@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { businessHoursBodySchema } from './businessSchemas.js';
 
 // GET/DELETE /businesses/:id, GET/DELETE /users/:id — id is a numeric string in the URL for businesses,
 // but a UUID string for users. Handle separately since they're different types.
@@ -70,6 +71,14 @@ export const adminUpdateBusinessSchema = z.object({
     latitude: z.coerce.number().min(-90).max(90).optional(),
     longitude: z.coerce.number().min(-180).max(180).optional(),
     neighborhood: z.string().max(100).optional(),
+    // Same shape/validation as PUT /businesses/:slug/hours (see
+    // businessSchemas.js) — admin can set a business's hours on its behalf,
+    // same "admin isn't tier-gated" pattern as everything else on this route.
+    // The `hours` key itself is optional here (omit it to leave hours
+    // untouched, same as every other field on this partial-update editor),
+    // but when it IS present it must still be the complete seven-day object —
+    // businessHoursBodySchema keeps its own replace-all requirement either way.
+    hours: businessHoursBodySchema.optional(),
   }),
 });
 

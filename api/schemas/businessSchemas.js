@@ -91,14 +91,21 @@ for (const day of DAY_KEYS) {
   hoursShape[day] = daySchema;
 }
 
+// Body-only shape, exported separately from updateBusinessHoursSchema below so
+// adminSchemas.js's full-field business editor can compose it in as one
+// optional field (`hours: businessHoursBodySchema.optional()`) instead of
+// duplicating the day/time validation rules a second time.
+//
+// .strict() — reject unknown day keys (typos, non-day strings) rather than
+// silently ignoring them and leaving that day unset.
+export const businessHoursBodySchema = z.object(hoursShape).strict();
+
 export const updateBusinessHoursSchema = z.object({
   query: z.object({}).optional(),
   params: z.object({
     slug: slugParam,
   }),
-  // .strict() — reject unknown day keys (typos, non-day strings) rather than
-  // silently ignoring them and leaving that day unset.
-  body: z.object(hoursShape).strict(),
+  body: businessHoursBodySchema,
 });
 
 export const updateBusinessCategoriesSchema = z.object({

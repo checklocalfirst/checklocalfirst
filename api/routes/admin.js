@@ -117,6 +117,10 @@ router.patch('/businesses/:id/status', validate(updateBusinessStatusSchema), cat
 // above since it's a distinct approve/suspend workflow). Admin is never tier-gated
 // here: it can set timeline fields on a basic business, same pattern as
 // is_featured/in_carousel already being admin-only togglable regardless of tier.
+// `hours` (added alongside PUT /businesses/:slug/hours) follows the same
+// partial-update convention as every other field here — omit it to leave a
+// business's hours untouched, or send the complete seven-day object to
+// replace it (see businessHoursBodySchema in businessSchemas.js).
 router.patch('/businesses/:id', validate(adminUpdateBusinessSchema), catchAsync(async (req, res) => {
     const { id } = req.validated.params;
     const {
@@ -126,7 +130,8 @@ router.patch('/businesses/:id', validate(adminUpdateBusinessSchema), catchAsync(
         timeline_year_1, timeline_description_1,
         timeline_year_2, timeline_description_2,
         timeline_year_3, timeline_description_3,
-        latitude, longitude, neighborhood
+        latitude, longitude, neighborhood,
+        hours
     } = req.validated.body;
 
     const { data: existing, error: existingError } = await supabaseAdmin
@@ -182,6 +187,7 @@ router.patch('/businesses/:id', validate(adminUpdateBusinessSchema), catchAsync(
             timeline_year_1, timeline_description_1,
             timeline_year_2, timeline_description_2,
             timeline_year_3, timeline_description_3,
+            hours,
             ...geoUpdate
         })
         .eq('id', id)
