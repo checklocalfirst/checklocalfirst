@@ -352,6 +352,9 @@ router.get('/', catchAsync(async (req, res) => {
         }
 
         let total = ranked.length > 0 ? Number(ranked[0].total_count) : 0;
+        // Set when a misspelled word was corrected (migration 040), e.g.
+        // "blankit" -> "blanket"; the frontend shows "Showing results for …".
+        let correctedQuery = ranked.length > 0 ? ranked[0].corrected_query ?? null : null;
 
         // Past the last page — the page itself is empty either way, but the
         // total should still be right so the frontend can page back.
@@ -367,6 +370,7 @@ router.get('/', catchAsync(async (req, res) => {
             }
 
             total = firstRow.length > 0 ? Number(firstRow[0].total_count) : 0;
+            correctedQuery = firstRow.length > 0 ? firstRow[0].corrected_query ?? null : null;
         }
 
         if (total === 0) {
@@ -377,6 +381,7 @@ router.get('/', catchAsync(async (req, res) => {
             success: true,
             data: await hydrateRankedResults(ranked, Boolean(location)),
             pagination: buildPaginationMeta({ ...pagination, total }),
+            corrected_query: correctedQuery,
         });
     }
 
