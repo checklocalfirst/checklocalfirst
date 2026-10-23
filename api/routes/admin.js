@@ -17,7 +17,9 @@ import {
     adminUploadPhotoSchema,
     adminUpdatePhotoSchema,
     adminPhotoIdParamSchema,
-    updatePhotoApprovalSchema
+    updatePhotoApprovalSchema,
+    createSearchSynonymSchema,
+    searchSynonymIdParamSchema
 } from '../schemas/adminSchemas.js'
 import { categoryIdParamSchema, updateCategorySchema } from '../schemas/categorySchemas.js'
 import { catchAsync } from '../helpers/catchAsync.js';
@@ -1097,6 +1099,65 @@ router.put('/categories/:id', validate(updateCategorySchema), catchAsync(async (
     return res.status(200).json({ success: true, message: 'Category updated successfully' });
 }))
 
+
+
+// SEARCH SYNONYMS (migration 036) — pairs like "chili crunch" <-> "chili crisp"
+// that /search expands queries with, in both directions. Changes apply to the
+// very next search; nothing to rebuild.
+
+router.get('/search-synonyms', catchAsync(async (req, res) => {
+    const { data, error } = await supabaseAdmin
+        .from('search_synonyms')
+        .select('*')
+        .order('term', { ascending: true });
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data });
+}))
+
+router.post('/search-synonyms', validate(createSearchSynonymSchema), catchAsync(async (req, res) => {
+    const { term, synonym } = req.validated.body;
+
+    const { data, error } = await supabaseAdmin
+        .from('search_synonyms')
+        .insert({ term, synonym })
+        .select()
+        .single();
+
+    if (error) {
+        // Unique on the pair in either order — (a, b) and (b, a) collide.
+        if (error.code === '23505') {
+            throw new AppError('That synonym pair already exists', 409);
+        }
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(201).json({ success: true, message: 'Synonym added', data });
+}))
+
+router.delete('/search-synonyms/:id', validate(searchSynonymIdParamSchema), catchAsync(async (req, res) => {
+    const { id } = req.validated.params;
+
+    const { data, error } = await supabaseAdmin
+        .from('search_synonyms')
+        .delete()
+        .eq('id', id)
+        .select()
+        .maybeSingle();
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    if (!data) {
+        throw new AppError('Synonym not found', 404);
+    }
+
+    return res.status(200).json({ success: true, message: 'Synonym deleted' });
+}))
 
 router.get('/stats', catchAsync(async (req, res) => {
     const { count: totalBusinesses, error: businessError } = await supabaseAdmin.from('businesses').select('*', { count: 'exact', head: true });

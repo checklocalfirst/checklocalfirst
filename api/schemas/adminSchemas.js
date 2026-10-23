@@ -229,3 +229,36 @@ export const adminUpdateServiceSchema = z.object({
     category_id: z.coerce.number().int().positive().optional(),
   }),
 });
+// Search synonyms (migration 036) — two phrases search treats as the same thing,
+// matched in both directions. Normalized to lowercase/trimmed here because the
+// table's CHECK constraint requires it; letters, digits, spaces, hyphens and
+// apostrophes only.
+const synonymPhrase = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(1, 'Phrase is required')
+  .max(100)
+  .regex(/^[a-z0-9' -]+$/, 'Only letters, numbers, spaces, hyphens and apostrophes are allowed');
+
+export const createSearchSynonymSchema = z.object({
+  query: z.object({}).optional(),
+  params: z.object({}).optional(),
+  body: z
+    .object({
+      term: synonymPhrase,
+      synonym: synonymPhrase,
+    })
+    .refine((body) => body.term !== body.synonym, {
+      message: 'term and synonym must be different',
+      path: ['synonym'],
+    }),
+});
+
+export const searchSynonymIdParamSchema = z.object({
+  body: z.object({}).optional(),
+  query: z.object({}).optional(),
+  params: z.object({
+    id: z.coerce.number().int().positive('Invalid synonym id'),
+  }),
+});
