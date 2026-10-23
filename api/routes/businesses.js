@@ -14,8 +14,16 @@ import { geocodeAddress, addressFieldsChanged } from '../helpers/geocode.js';
 import { deleteBusinessPhotoFile } from '../helpers/photoStorage.js';
 import { trackLimiter, redeemLimiter } from '../middleware/rateLimiter.js';
 import { aggregateEventsByTypeAndDay } from '../helpers/analytics.js';
+import {
+    LOGGED_BUSINESS_FIELDS,
+    LOGGED_SERVICE_FIELDS,
+    diffFields,
+    getBusinessSnapshot,
+    getBusinessCategoryNames,
+    logBusinessChange
+} from '../helpers/changeLog.js';
 import { sortPremiumFirst } from '../helpers/sorting.js';
-import { PUBLIC_BUSINESS_COLUMNS } from '../helpers/publicColumns.js';
+import { PUBLIC_BUSINESS_COLUMNS, toPublicBusiness } from '../helpers/publicColumns.js';
 import {
     businessSlugParamSchema,
     updateBusinessSchema,
@@ -137,7 +145,7 @@ router.get('/', catchAsync(async (req, res) => {
 
     // Premium first, newest-first within each tier (see /search's browse
     // path for the same convention).
-    res.json({ success: true, data: sortPremiumFirst(data, (business) => business.business_tier) });
+    res.json({ success: true, data: sortPremiumFirst(data, (business) => business.business_tier).map(toPublicBusiness) });
 }))
 
 router.get('/me', authMiddleware, catchAsync(async (req, res) => {
@@ -166,7 +174,7 @@ router.get('/featured', catchAsync(async (req, res) => {
         throw new AppError(error.message, 500);
     }
 
-    res.json({ success: true, data: data ?? null });
+    res.json({ success: true, data: data ? toPublicBusiness(data) : null });
 }))
 
 router.get('/carousel', catchAsync(async (req, res) => {
@@ -180,7 +188,7 @@ router.get('/carousel', catchAsync(async (req, res) => {
         throw new AppError(error.message, 500);
     }
 
-    res.json({ success: true, data });
+    res.json({ success: true, data: data.map(toPublicBusiness) });
 }))
 
 // Joined to users for the owner's first_name (e.g. "Message [name]" /
@@ -210,7 +218,7 @@ router.get('/:slug', validate(businessSlugParamSchema), catchAsync(async (req, r
         throw new AppError('Business not found', 404);
     }
 
-    res.json({ success: true, data });
+    res.json({ success: true, data: toPublicBusiness(data) });
 }))
 
 // Note: GET /:slug/services below still goes through the anon `supabase`
@@ -267,6 +275,9 @@ router.put('/:slug/services/:id', authMiddleware, validate(updateServiceSchema),
 
     const businessData = await verifyBusinessOwnership(slug, req.user.id);
 
+    // Read first for the change log's "from" values.
+    const { data: before } = await supabaseAdmin.from('services').select('name, description, category_id').eq('id', id).eq('business_id', businessData.id).maybeSingle();
+
     // Scoped to this business's id, not just the service id — ownership of the
     // slug alone doesn't prove ownership of whatever service id was sent.
     const {data, error} = await supabaseAdmin.from('services').update({name, description, category_id}).eq('id', id).eq('business_id', businessData.id).select().maybeSingle();
@@ -279,6 +290,15 @@ router.put('/:slug/services/:id', authMiddleware, validate(updateServiceSchema),
         throw new AppError('Service not found', 404);
     }
 
+    await logBusinessChange({
+        businessId: businessData.id,
+        businessName: businessData.name,
+        actor: { userId: req.user.id, role: 'owner' },
+        action: 'service_updated',
+        entityId: data.id,
+        changes: diffFields(before, { name, description, category_id }, LOGGED_SERVICE_FIELDS)
+    });
+
     return res.status(200).json({ success: true, message: 'Service for business updated' });
 }))
 
@@ -288,11 +308,21 @@ router.post('/:slug/services', authMiddleware, validate(createServiceSchema), ca
 
     const businessData = await verifyBusinessOwnership(slug, req.user.id);
 
-    const {data, error} = await supabaseAdmin.from('services').insert({business_id: businessData.id, name, description, category_id});
+    const {data, error} = await supabaseAdmin.from('services').insert({business_id: businessData.id, name, description, category_id}).select('id').single();
 
     if(error){
         throw new AppError(error.message, 500);
     }
+
+    await logBusinessChange({
+        businessId: businessData.id,
+        businessName: businessData.name,
+        actor: { userId: req.user.id, role: 'owner' },
+        action: 'service_created',
+        entityId: data.id,
+        changes: diffFields({}, { name, description, category_id }, LOGGED_SERVICE_FIELDS),
+        skipIfUnchanged: false
+    });
 
     return res.status(201).json({ success: true, message: 'Service for business added' });
 }))
@@ -313,6 +343,16 @@ router.delete('/:slug/services/:id', authMiddleware, validate(serviceIdParamSche
         throw new AppError('Service not found', 404);
     }
 
+    await logBusinessChange({
+        businessId: businessData.id,
+        businessName: businessData.name,
+        actor: { userId: req.user.id, role: 'owner' },
+        action: 'service_deleted',
+        entityId: data.id,
+        changes: diffFields(data, { name: null, description: null, category_id: null }, LOGGED_SERVICE_FIELDS),
+        skipIfUnchanged: false
+    });
+
     return res.status(200).json({ success: true, message: 'Service for business deleted' });
 }))
 
@@ -321,6 +361,7 @@ router.put('/:slug', authMiddleware, validate(updateBusinessSchema), catchAsync(
     const {
         name, description, address, city, state, zip, phone, email,
         website_url, about_owner, facebook_url, instagram_url, yelp_url,
+        address_label, hide_address,
         timeline_year_1, timeline_description_1,
         timeline_year_2, timeline_description_2,
         timeline_year_3, timeline_description_3
@@ -329,6 +370,9 @@ router.put('/:slug', authMiddleware, validate(updateBusinessSchema), catchAsync(
     const businessData = await verifyBusinessOwnership(slug, req.user.id);
 
     assertPremiumFieldsAllowed(req.validated.body, businessData.business_tier);
+
+    // "Before" picture for the change log — best-effort, never blocks the save.
+    const before = await getBusinessSnapshot(businessData.id).catch(() => null);
 
     // Only re-geocode when address/city/state/zip actually changed in this request —
     // not on every PUT regardless of what fields were sent.
@@ -357,6 +401,7 @@ router.put('/:slug', authMiddleware, validate(updateBusinessSchema), catchAsync(
     const {data, error} = await supabaseAdmin.from('businesses').update({
         name, description, address, city, state, zip, phone, email,
         website_url, about_owner, facebook_url, instagram_url, yelp_url,
+        address_label, hide_address,
         timeline_year_1, timeline_description_1,
         timeline_year_2, timeline_description_2,
         timeline_year_3, timeline_description_3,
@@ -365,6 +410,16 @@ router.put('/:slug', authMiddleware, validate(updateBusinessSchema), catchAsync(
 
     if(error){
         throw new AppError(error.message, 500);
+    }
+
+    if (before) {
+        await logBusinessChange({
+            businessId: businessData.id,
+            businessName: name ?? businessData.name,
+            actor: { userId: req.user.id, role: 'owner' },
+            action: 'profile_updated',
+            changes: diffFields(before, { ...req.validated.body, ...geoUpdate }, LOGGED_BUSINESS_FIELDS)
+        });
     }
 
     return res.status(200).json({ success: true, message: `${name ?? businessData.name} successfully updated` });
@@ -377,6 +432,8 @@ router.put('/:slug/categories', authMiddleware, validate(updateBusinessCategorie
     const { category_ids } = req.validated.body;
 
     const businessData = await verifyBusinessOwnership(slug, req.user.id);
+
+    const categoriesBefore = await getBusinessCategoryNames(businessData.id).catch(() => null);
 
     const { error: deleteError } = await supabaseAdmin
         .from('business_categories')
@@ -394,6 +451,18 @@ router.put('/:slug/categories', authMiddleware, validate(updateBusinessCategorie
         if (insertError) {
             throw new AppError(insertError.message, 500);
         }
+    }
+
+    if (categoriesBefore) {
+        const categoriesAfter = await getBusinessCategoryNames(businessData.id).catch(() => null);
+
+        await logBusinessChange({
+            businessId: businessData.id,
+            businessName: businessData.name,
+            actor: { userId: req.user.id, role: 'owner' },
+            action: 'categories_updated',
+            changes: categoriesAfter ? diffFields({ categories: categoriesBefore }, { categories: categoriesAfter }, ['categories']) : {}
+        });
     }
 
     return res.status(200).json({ success: true, message: 'Business categories updated' });
@@ -462,6 +531,8 @@ router.put('/:slug/hours', authMiddleware, validate(updateBusinessHoursSchema), 
 
     const businessData = await verifyBusinessOwnership(slug, req.user.id);
 
+    const before = await getBusinessSnapshot(businessData.id).catch(() => null);
+
     const { data, error } = await supabaseAdmin
         .from('businesses')
         .update({ hours: req.validated.body })
@@ -471,6 +542,16 @@ router.put('/:slug/hours', authMiddleware, validate(updateBusinessHoursSchema), 
 
     if (error) {
         throw new AppError(error.message, 500);
+    }
+
+    if (before) {
+        await logBusinessChange({
+            businessId: businessData.id,
+            businessName: businessData.name,
+            actor: { userId: req.user.id, role: 'owner' },
+            action: 'hours_updated',
+            changes: diffFields(before, { hours: data.hours }, ['hours'])
+        });
     }
 
     return res.status(200).json({ success: true, message: 'Business hours updated', data: data.hours });
@@ -1160,6 +1241,15 @@ router.delete('/:slug', authMiddleware, validate(businessSlugParamSchema), catch
         .eq('business_id', businessData.id);
 
     if (photosError) throw new AppError(photosError.message, 500);
+
+    // Logged before the delete — business_id becomes NULL afterwards, the name snapshot stays.
+    await logBusinessChange({
+        businessId: businessData.id,
+        businessName: businessData.name,
+        actor: { userId: req.user.id, role: 'owner' },
+        action: 'business_deleted',
+        skipIfUnchanged: false
+    });
 
     const {error: servicesError} = await supabaseAdmin.from('services').delete().eq('business_id', businessData.id);
     if(servicesError) throw new AppError(servicesError.message, 500);

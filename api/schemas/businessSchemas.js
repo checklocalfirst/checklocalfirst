@@ -26,6 +26,15 @@ export const PREMIUM_ONLY_BUSINESS_FIELDS = [
 
 const yearSchema = z.coerce.number().int().min(1800).max(2100);
 
+// Migration 038 — optional line shown above the address ("Find us at the
+// Riverside Market"). Empty string or null clears it.
+export const addressLabelSchema = z
+  .string()
+  .trim()
+  .max(100, 'Address label must be 100 characters or fewer')
+  .nullable()
+  .transform((value) => (value === '' ? null : value));
+
 export const updateBusinessSchema = z.object({
   query: z.object({}).optional(),
   params: z.object({
@@ -46,6 +55,10 @@ export const updateBusinessSchema = z.object({
     facebook_url: z.string().url('Invalid URL').max(2048).optional(),
     instagram_url: z.string().url('Invalid URL').max(2048).optional(),
     yelp_url: z.string().url('Invalid URL').max(2048).optional(),
+    // Migration 038 — hide_address keeps the street address, zip and map pin
+    // out of public responses (see toPublicBusiness in helpers/publicColumns.js).
+    address_label: addressLabelSchema.optional(),
+    hide_address: z.boolean().optional(),
     // Premium only — see PREMIUM_ONLY_BUSINESS_FIELDS above.
     timeline_year_1: yearSchema.optional(),
     timeline_description_1: z.string().max(2000).optional(),

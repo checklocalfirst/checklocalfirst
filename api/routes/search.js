@@ -1,10 +1,10 @@
 import express from 'express';
-import { supabase } from '../dbconnect.js';
+import { supabase, supabaseAdmin } from '../dbconnect.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
 import { parsePagination, buildPaginationMeta, paginateArray } from '../helpers/pagination.js';
 import { sortPremiumFirst } from '../helpers/sorting.js';
-import { PUBLIC_BUSINESS_COLUMNS } from '../helpers/publicColumns.js';
+import { PUBLIC_BUSINESS_COLUMNS, toPublicBusiness, publicDistance } from '../helpers/publicColumns.js';
 
 const router = express.Router();
 
@@ -38,14 +38,14 @@ function groupBusinessesDirectly(businesses = [], distanceByBusinessId) {
         const { services, ...businessFields } = business;
 
         const result = {
-            business: businessFields,
+            business: toPublicBusiness(businessFields),
             bestMatch: services?.[0] ?? null,
             matchingServices: services ?? [],
             matchCount: services?.length ?? 0
         };
 
         if (distanceByBusinessId) {
-            result.distance_miles = distanceByBusinessId.get(businessFields.id) ?? null;
+            result.distance_miles = publicDistance(businessFields, distanceByBusinessId.get(businessFields.id) ?? null);
         }
 
         return result;
@@ -136,7 +136,7 @@ async function hydrateRankedResults(rankedRows, includeDistance) {
         const matchingServices = matched.length > 0 ? matched : services;
 
         const result = {
-            business,
+            business: toPublicBusiness(business),
             bestMatch: matchingServices[0] ?? null,
             matchingServices,
             matchCount: matchingServices.length,
@@ -146,7 +146,7 @@ async function hydrateRankedResults(rankedRows, includeDistance) {
         };
 
         if (includeDistance) {
-            result.distance_miles = row.distance_miles === null ? null : Number(row.distance_miles);
+            result.distance_miles = publicDistance(business, row.distance_miles === null ? null : Number(row.distance_miles));
         }
 
         results.push(result);
@@ -208,7 +208,31 @@ async function getFallbackBusinesses({ categoryId, location }) {
 // `fallback` carries a did-you-mean term plus some businesses to show instead.
 // Best-effort — a failure building the fallback is logged, never turned into a
 // failed search.
-async function sendNoResults(res, pagination, { searchQuery, categoryId, location }) {
+// Records a no-results search for GET /admin/search-misses (migration 037).
+// Fire-and-forget: never delays or fails the search response. Stores no IP,
+// user, or coordinates — only whether a location filter was on.
+function logSearchMiss({ searchQuery, categorySlug, location, didYouMean }) {
+    const report = (err) => console.error('[search] Failed to log search miss:', err?.message ?? err);
+
+    try {
+        Promise.resolve(
+            supabaseAdmin
+                .from('search_misses')
+                .insert({
+                    query: searchQuery ? searchQuery.toLowerCase() : null,
+                    category_slug: categorySlug || null,
+                    had_location: Boolean(location),
+                    did_you_mean: didYouMean ?? null
+                })
+        )
+            .then(({ error } = {}) => error && report(error))
+            .catch(report);
+    } catch (err) {
+        report(err);
+    }
+}
+
+async function sendNoResults(res, pagination, { searchQuery, categoryId, categorySlug, location }) {
     const fallback = { did_you_mean: null, businesses: [] };
 
     try {
@@ -226,6 +250,8 @@ async function sendNoResults(res, pagination, { searchQuery, categoryId, locatio
     } catch (err) {
         console.error('[search] Failed to build no-results fallback:', err.message ?? err);
     }
+
+    logSearchMiss({ searchQuery, categorySlug, location, didYouMean: fallback.did_you_mean });
 
     return res.json({
         success: true,
@@ -295,7 +321,7 @@ router.get('/', catchAsync(async (req, res) => {
 
         // Unknown slug (stale link, typo, deleted category) — nothing can match.
         if (!categoryRow) {
-            return sendNoResults(res, pagination, { searchQuery: hasQuery ? searchQuery : '', categoryId: null, location });
+            return sendNoResults(res, pagination, { searchQuery: hasQuery ? searchQuery : '', categoryId: null, categorySlug: category, location });
         }
 
         categoryId = categoryRow.id;
@@ -344,7 +370,7 @@ router.get('/', catchAsync(async (req, res) => {
         }
 
         if (total === 0) {
-            return sendNoResults(res, pagination, { searchQuery, categoryId, location });
+            return sendNoResults(res, pagination, { searchQuery, categoryId, categorySlug: category, location });
         }
 
         return res.json({
@@ -365,7 +391,7 @@ router.get('/', catchAsync(async (req, res) => {
     );
 
     if (allowedIds !== null && allowedIds.length === 0) {
-        return sendNoResults(res, pagination, { searchQuery: '', categoryId, location });
+        return sendNoResults(res, pagination, { searchQuery: '', categoryId, categorySlug: category, location });
     }
 
     let browseQuery = supabase
@@ -384,7 +410,7 @@ router.get('/', catchAsync(async (req, res) => {
     }
 
     if (data.length === 0) {
-        return sendNoResults(res, pagination, { searchQuery: '', categoryId, location });
+        return sendNoResults(res, pagination, { searchQuery: '', categoryId, categorySlug: category, location });
     }
 
     const groupedDirect = sortPremiumFirst(

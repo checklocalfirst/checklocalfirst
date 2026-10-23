@@ -5,7 +5,7 @@ import { validate } from '../middleware/validate.js';
 import { addFavoriteSchema, removeFavoriteParamSchema } from '../schemas/favoriteSchemas.js';
 import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
-import { PUBLIC_BUSINESS_COLUMNS } from '../helpers/publicColumns.js';
+import { PUBLIC_BUSINESS_COLUMNS, toPublicBusiness } from '../helpers/publicColumns.js';
 
 const router = express.Router();
 
@@ -20,7 +20,10 @@ router.get('/', catchAsync(async (req, res) => {
         throw new AppError(error.message, 500);
     }
 
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({
+        success: true,
+        data: data.map((row) => ({ ...row, businesses: row.businesses ? toPublicBusiness(row.businesses) : null }))
+    });
 }))
 
 router.post('/', validate(addFavoriteSchema), catchAsync(async (req, res) => {

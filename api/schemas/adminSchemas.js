@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { businessHoursBodySchema } from './businessSchemas.js';
+import { businessHoursBodySchema, addressLabelSchema } from './businessSchemas.js';
 
 // GET/DELETE /businesses/:id, GET/DELETE /users/:id — id is a numeric string in the URL for businesses,
 // but a UUID string for users. Handle separately since they're different types.
@@ -61,6 +61,8 @@ export const adminUpdateBusinessSchema = z.object({
     facebook_url: z.string().url('Invalid URL').max(2048).optional(),
     instagram_url: z.string().url('Invalid URL').max(2048).optional(),
     yelp_url: z.string().url('Invalid URL').max(2048).optional(),
+    address_label: addressLabelSchema.optional(),
+    hide_address: z.boolean().optional(),
     timeline_year_1: yearSchema.optional(),
     timeline_description_1: z.string().max(2000).optional(),
     timeline_year_2: yearSchema.optional(),
@@ -261,4 +263,41 @@ export const searchSynonymIdParamSchema = z.object({
   params: z.object({
     id: z.coerce.number().int().positive('Invalid synonym id'),
   }),
+});
+
+// GET /admin/search-misses (migration 037) — most-missed searches over the last
+// `days` days.
+export const searchMissesQuerySchema = z.object({
+  body: z.object({}).optional(),
+  params: z.object({}).optional(),
+  query: z.object({
+    days: z.coerce.number().int().min(1).max(365).default(30),
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+  }),
+});
+
+// GET /admin/change-log and /admin/businesses/:id/change-log (migration 039).
+// page/limit are read by parsePagination, like every other paged admin list.
+const changeLogFilters = {
+  actor_role: z.enum(['owner', 'admin', 'system']).optional(),
+  action: z.string().max(40).optional(),
+  page: z.coerce.number().int().min(1).optional(),
+  limit: z.coerce.number().int().min(1).optional(),
+};
+
+export const changeLogQuerySchema = z.object({
+  body: z.object({}).optional(),
+  params: z.object({}).optional(),
+  query: z.object({
+    business_id: z.coerce.number().int().positive('Invalid business id').optional(),
+    ...changeLogFilters,
+  }),
+});
+
+export const businessChangeLogQuerySchema = z.object({
+  body: z.object({}).optional(),
+  params: z.object({
+    id: z.coerce.number().int().positive('Invalid business id'),
+  }),
+  query: z.object(changeLogFilters),
 });

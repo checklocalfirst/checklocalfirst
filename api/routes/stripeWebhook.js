@@ -7,6 +7,7 @@ import crypto from 'crypto';
 import { authMiddleware } from '../middleware/auth.js';
 import { sendEmail } from '../helpers/sendEmail.js';
 import { geocodeAddress } from '../helpers/geocode.js';
+import { logBusinessChange } from '../helpers/changeLog.js';
 
 const router = express.Router();
 
@@ -115,6 +116,15 @@ async function provisionBusinessAccount(customer, customerId, subscriptionId) {
     if (businessError) {
         throw new AppError(businessError.message, 500);
     }
+
+    await logBusinessChange({
+        businessId: newBusiness.id,
+        businessName: metadata.business_name,
+        actor: { userId: authData.user.id, role: 'system' },
+        action: 'business_created',
+        changes: { business_tier: { from: null, to: metadata.business_tier }, slug: { from: null, to: slug } },
+        skipIfUnchanged: false
+    });
 
     // Every new business starts with a standing "10% off one item" welcome
     // discount (WELCOME10). Wrapped in its own try/catch for the same reason

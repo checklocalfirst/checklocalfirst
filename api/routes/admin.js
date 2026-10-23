@@ -19,7 +19,10 @@ import {
     adminPhotoIdParamSchema,
     updatePhotoApprovalSchema,
     createSearchSynonymSchema,
-    searchSynonymIdParamSchema
+    searchSynonymIdParamSchema,
+    searchMissesQuerySchema,
+    changeLogQuerySchema,
+    businessChangeLogQuerySchema
 } from '../schemas/adminSchemas.js'
 import { categoryIdParamSchema, updateCategorySchema } from '../schemas/categorySchemas.js'
 import { catchAsync } from '../helpers/catchAsync.js';
@@ -35,6 +38,14 @@ import {
 import { adminBusinessAnalyticsSchema } from '../schemas/analyticsSchemas.js'
 import { aggregateEventsByTypeAndDay } from '../helpers/analytics.js';
 import { parsePagination, buildPaginationMeta } from '../helpers/pagination.js';
+import {
+    LOGGED_BUSINESS_FIELDS,
+    LOGGED_SERVICE_FIELDS,
+    diffFields,
+    getBusinessSnapshot,
+    getBusinessCategoryNames,
+    logBusinessChange
+} from '../helpers/changeLog.js';
 
 const router = express.Router()
 
@@ -102,6 +113,8 @@ router.patch('/businesses/:id/status', validate(updateBusinessStatusSchema), cat
         }
     }
 
+    const before = await getBusinessSnapshot(id).catch(() => null);
+
     const { data, error } = await supabaseAdmin.from('businesses').update({status}).eq('id', id).select().single();
 
     if(error){
@@ -110,6 +123,16 @@ router.patch('/businesses/:id/status', validate(updateBusinessStatusSchema), cat
 
     if(!data){
         throw new AppError('Business not found', 404);
+    }
+
+    if (before) {
+        await logBusinessChange({
+            businessId: data.id,
+            businessName: data.name,
+            actor: { userId: req.user.id, role: 'admin' },
+            action: 'status_changed',
+            changes: diffFields(before, { status }, ['status'])
+        });
     }
 
     return res.status(200).json({ success: true, message: 'Business status updated' });
@@ -129,6 +152,7 @@ router.patch('/businesses/:id', validate(adminUpdateBusinessSchema), catchAsync(
         name, description, address, city, state, zip, phone, email,
         business_tier, is_comped,
         website_url, about_owner, facebook_url, instagram_url, yelp_url,
+        address_label, hide_address,
         timeline_year_1, timeline_description_1,
         timeline_year_2, timeline_description_2,
         timeline_year_3, timeline_description_3,
@@ -136,9 +160,10 @@ router.patch('/businesses/:id', validate(adminUpdateBusinessSchema), catchAsync(
         hours
     } = req.validated.body;
 
+    // Doubles as the change log's "before" snapshot.
     const { data: existing, error: existingError } = await supabaseAdmin
         .from('businesses')
-        .select('address, city, state, zip')
+        .select(['id', ...LOGGED_BUSINESS_FIELDS].join(', '))
         .eq('id', id)
         .single();
 
@@ -186,6 +211,7 @@ router.patch('/businesses/:id', validate(adminUpdateBusinessSchema), catchAsync(
             name, description, address, city, state, zip, phone, email,
             business_tier, is_comped,
             website_url, about_owner, facebook_url, instagram_url, yelp_url,
+            address_label, hide_address,
             timeline_year_1, timeline_description_1,
             timeline_year_2, timeline_description_2,
             timeline_year_3, timeline_description_3,
@@ -203,6 +229,14 @@ router.patch('/businesses/:id', validate(adminUpdateBusinessSchema), catchAsync(
     if (!data) {
         throw new AppError('Business not found', 404);
     }
+
+    await logBusinessChange({
+        businessId: data.id,
+        businessName: data.name,
+        actor: { userId: req.user.id, role: 'admin' },
+        action: 'profile_updated',
+        changes: diffFields(existing, { ...req.validated.body, ...geoUpdate }, LOGGED_BUSINESS_FIELDS)
+    });
 
     return res.status(200).json({ success: true, message: 'Business updated successfully', data });
 }))
@@ -326,13 +360,15 @@ router.put('/businesses/:id/categories', validate(adminUpdateBusinessCategoriesS
 
     const { data: business, error: businessError } = await supabaseAdmin
         .from('businesses')
-        .select('id')
+        .select('id, name')
         .eq('id', id)
         .single();
 
     if (businessError || !business) {
         throw new AppError('Business not found', 404);
     }
+
+    const categoriesBefore = await getBusinessCategoryNames(id).catch(() => null);
 
     const { error: deleteError } = await supabaseAdmin
         .from('business_categories')
@@ -350,6 +386,18 @@ router.put('/businesses/:id/categories', validate(adminUpdateBusinessCategoriesS
         if (insertError) {
             throw new AppError(insertError.message, 500);
         }
+    }
+
+    if (categoriesBefore) {
+        const categoriesAfter = await getBusinessCategoryNames(id).catch(() => null);
+
+        await logBusinessChange({
+            businessId: id,
+            businessName: business.name,
+            actor: { userId: req.user.id, role: 'admin' },
+            action: 'categories_updated',
+            changes: categoriesAfter ? diffFields({ categories: categoriesBefore }, { categories: categoriesAfter }, ['categories']) : {}
+        });
     }
 
     return res.status(200).json({ success: true, message: 'Business categories updated' });
@@ -846,11 +894,20 @@ router.get('/analytics', catchAsync(async (req, res) => {
 router.delete('/businesses/:id', validate(businessIdParamSchema), catchAsync(async (req, res) => {
     const { id } = req.validated.params;
 
-    const { data: businessData, error: businessError } = await supabaseAdmin.from('businesses').select('owner_user_id').eq('id', id).single();
+    const { data: businessData, error: businessError } = await supabaseAdmin.from('businesses').select('owner_user_id, name').eq('id', id).single();
 
     if(businessError || !businessData){
         throw new AppError('Business not found', 404);
     }
+
+    // Logged before the delete — business_id becomes NULL afterwards, the name snapshot stays.
+    await logBusinessChange({
+        businessId: id,
+        businessName: businessData.name,
+        actor: { userId: req.user.id, role: 'admin' },
+        action: 'business_deleted',
+        skipIfUnchanged: false
+    });
 
     // business_photos rows cascade-delete with the business (FK ON DELETE CASCADE),
     // but the actual files in Supabase Storage don't clean themselves up.
@@ -975,7 +1032,7 @@ router.post('/businesses/:id/services', validate(adminCreateServiceSchema), catc
 
     const { data: business, error: businessError } = await supabaseAdmin
         .from('businesses')
-        .select('id')
+        .select('id, name')
         .eq('id', id)
         .single();
 
@@ -995,6 +1052,16 @@ router.post('/businesses/:id/services', validate(adminCreateServiceSchema), catc
         }
         throw new AppError(error.message, 500);
     }
+
+    await logBusinessChange({
+        businessId: id,
+        businessName: business.name,
+        actor: { userId: req.user.id, role: 'admin' },
+        action: 'service_created',
+        entityId: data.id,
+        changes: diffFields({}, { name, description, category_id }, LOGGED_SERVICE_FIELDS),
+        skipIfUnchanged: false
+    });
 
     return res.status(201).json({ success: true, message: 'Service added', data });
 }))
@@ -1035,11 +1102,13 @@ router.put('/services/:id', validate(adminUpdateServiceSchema), catchAsync(async
     const { id } = req.validated.params;
     const { name, description, category_id } = req.validated.body;
 
+    const { data: before } = await supabaseAdmin.from('services').select('name, description, category_id').eq('id', id).maybeSingle();
+
     const { data, error } = await supabaseAdmin
         .from('services')
         .update({ name, description, category_id })
         .eq('id', id)
-        .select()
+        .select('*, businesses(name)')
         .single();
 
     if(error){
@@ -1049,6 +1118,15 @@ router.put('/services/:id', validate(adminUpdateServiceSchema), catchAsync(async
     if(!data){
         throw new AppError('Service not found', 404);
     }
+
+    await logBusinessChange({
+        businessId: data.business_id,
+        businessName: data.businesses?.name,
+        actor: { userId: req.user.id, role: 'admin' },
+        action: 'service_updated',
+        entityId: data.id,
+        changes: diffFields(before, { name, description, category_id }, LOGGED_SERVICE_FIELDS)
+    });
 
     return res.status(200).json({ success: true, message: 'Service updated successfully' });
 }))
@@ -1060,7 +1138,7 @@ router.delete('/services/:id', validate(adminServiceIdParamSchema), catchAsync(a
         .from('services')
         .delete()
         .eq('id', id)
-        .select()
+        .select('*, businesses(name)')
         .single();
 
     if(error){
@@ -1070,6 +1148,16 @@ router.delete('/services/:id', validate(adminServiceIdParamSchema), catchAsync(a
     if(!data){
         throw new AppError('Service not found', 404);
     }
+
+    await logBusinessChange({
+        businessId: data.business_id,
+        businessName: data.businesses?.name,
+        actor: { userId: req.user.id, role: 'admin' },
+        action: 'service_deleted',
+        entityId: data.id,
+        changes: diffFields(data, { name: null, description: null, category_id: null }, LOGGED_SERVICE_FIELDS),
+        skipIfUnchanged: false
+    });
 
     return res.status(200).json({ success: true, message: 'Service deleted successfully' });
 }))
@@ -1157,6 +1245,79 @@ router.delete('/search-synonyms/:id', validate(searchSynonymIdParamSchema), catc
     }
 
     return res.status(200).json({ success: true, message: 'Synonym deleted' });
+}))
+
+// SEARCH MISSES (migration 037) — searches that returned nothing. The top list
+// is what to act on (add a synonym, or nudge a business to describe what it
+// sells); /recent is the raw feed, newest first.
+
+router.get('/search-misses', validate(searchMissesQuerySchema), catchAsync(async (req, res) => {
+    const { days, limit } = req.validated.query;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data, error } = await supabaseAdmin.rpc('top_search_misses', { since, max_rows: limit });
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data: data.map((row) => ({ ...row, misses: Number(row.misses) })) });
+}))
+
+router.get('/search-misses/recent', catchAsync(async (req, res) => {
+    const { page, limit, from, to } = parsePagination(req.query);
+
+    const { data, error, count } = await supabaseAdmin
+        .from('search_misses')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data, pagination: buildPaginationMeta({ page, limit, total: count }) });
+}))
+
+// CHANGE LOG (migration 039) — who changed what on business profiles, newest
+// first. Filters: business_id, actor_role (owner | admin | system), action.
+
+async function listChangeLog(req, res, businessId) {
+    const { page, limit, from, to } = parsePagination(req.query);
+    const { actor_role, action } = req.validated.query;
+
+    let query = supabaseAdmin
+        .from('business_change_log')
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+    if (businessId) {
+        query = query.eq('business_id', businessId);
+    }
+    if (actor_role) {
+        query = query.eq('actor_role', actor_role);
+    }
+    if (action) {
+        query = query.eq('action', action);
+    }
+
+    const { data, error, count } = await query;
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    return res.status(200).json({ success: true, data, pagination: buildPaginationMeta({ page, limit, total: count }) });
+}
+
+router.get('/change-log', validate(changeLogQuerySchema), catchAsync(async (req, res) => {
+    return listChangeLog(req, res, req.validated.query.business_id);
+}))
+
+router.get('/businesses/:id/change-log', validate(businessChangeLogQuerySchema), catchAsync(async (req, res) => {
+    return listChangeLog(req, res, req.validated.params.id);
 }))
 
 router.get('/stats', catchAsync(async (req, res) => {
