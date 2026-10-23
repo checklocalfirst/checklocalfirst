@@ -10,6 +10,37 @@ import { geocodeAddress } from '../helpers/geocode.js';
 
 const router = express.Router();
 
+// businesses.slug is UNIQUE, so two businesses with the same name used to fail
+// the insert below *after* the auth user and users row were already created —
+// and Stripe's retry then failed on the duplicate auth user. Appends -2, -3, …
+// until the slug is free. Falls back to "business" if the name has no usable
+// characters at all.
+async function generateUniqueSlug(name) {
+    const base = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') || 'business';
+
+    const { data: taken, error } = await supabaseAdmin
+        .from('businesses')
+        .select('slug')
+        .like('slug', `${base}%`);
+
+    if (error) {
+        throw new AppError(error.message, 500);
+    }
+
+    const takenSlugs = new Set(taken.map((row) => row.slug));
+
+    if (!takenSlugs.has(base)) {
+        return base;
+    }
+
+    let suffix = 2;
+    while (takenSlugs.has(`${base}-${suffix}`)) {
+        suffix += 1;
+    }
+
+    return `${base}-${suffix}`;
+}
+
 // Creates the Supabase auth user + `users` row + `businesses` row for a new
 // business signup, and emails the password-setup link. Shared by both
 // invoice.payment_succeeded (the normal, charged-today signup) and
@@ -45,7 +76,7 @@ async function provisionBusinessAccount(customer, customerId, subscriptionId) {
         throw new AppError(userError.message, 500);
     }
 
-    const slug = metadata.business_name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    const slug = await generateUniqueSlug(metadata.business_name);
 
     // Geocoding failure shouldn't block account creation — geocodeAddress()
     // fails soft and returns null, which just leaves lat/lng/neighborhood

@@ -902,10 +902,14 @@ router.get('/users', catchAsync(async (req, res) => {
 router.get('/users/:id', validate(userIdParamSchema), catchAsync(async (req, res) => {
     const { id } = req.validated.params;
 
-    const { data, error } = await supabaseAdmin.from('users').select('*').eq('user_id', id).single();
+    const { data, error } = await supabaseAdmin.from('users').select('*').eq('user_id', id).maybeSingle();
 
     if(error){
         throw new AppError(error.message, 500);
+    }
+
+    if(!data){
+        throw new AppError('User not found', 404);
     }
 
     res.status(200).json({ success: true, data });

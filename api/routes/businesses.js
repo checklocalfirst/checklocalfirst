@@ -15,6 +15,7 @@ import { deleteBusinessPhotoFile } from '../helpers/photoStorage.js';
 import { trackLimiter, redeemLimiter } from '../middleware/rateLimiter.js';
 import { aggregateEventsByTypeAndDay } from '../helpers/analytics.js';
 import { sortPremiumFirst } from '../helpers/sorting.js';
+import { PUBLIC_BUSINESS_COLUMNS } from '../helpers/publicColumns.js';
 import {
     businessSlugParamSchema,
     updateBusinessSchema,
@@ -126,7 +127,7 @@ function assertPremiumFieldsAllowed(body, businessTier) {
 router.get('/', catchAsync(async (req, res) => {
     const { data, error} = await supabase
         .from('businesses')
-        .select('*')
+        .select(PUBLIC_BUSINESS_COLUMNS)
         .eq('status', 'approved')
         .order('created_at', { ascending: false });
 
@@ -156,7 +157,7 @@ router.get('/featured', catchAsync(async (req, res) => {
     // so this is a single object (or null), not a list.
     const { data, error } = await supabase
         .from('businesses')
-        .select('*')
+        .select(PUBLIC_BUSINESS_COLUMNS)
         .eq('status', 'approved')
         .eq('is_featured', true)
         .maybeSingle();
@@ -171,7 +172,7 @@ router.get('/featured', catchAsync(async (req, res) => {
 router.get('/carousel', catchAsync(async (req, res) => {
     const { data, error } = await supabase
         .from('businesses')
-        .select('*')
+        .select(PUBLIC_BUSINESS_COLUMNS)
         .eq('status', 'approved')
         .eq('in_carousel', true);
 
@@ -196,7 +197,7 @@ router.get('/:slug', validate(businessSlugParamSchema), catchAsync(async (req, r
     const { slug } = req.validated.params;
     const { data, error } = await supabaseAdmin
         .from('businesses')
-        .select('*, users(first_name)')
+        .select(`${PUBLIC_BUSINESS_COLUMNS}, users(first_name)`)
         .eq('slug', slug)
         .eq('status', 'approved')
         .maybeSingle();
@@ -264,12 +265,18 @@ router.put('/:slug/services/:id', authMiddleware, validate(updateServiceSchema),
     const { slug, id } = req.validated.params;
     const { name, description, category_id } = req.validated.body;
 
-    await verifyBusinessOwnership(slug, req.user.id);
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
 
-    const {data, error} = await supabaseAdmin.from('services').update({name, description, category_id}).eq('id', id);
+    // Scoped to this business's id, not just the service id — ownership of the
+    // slug alone doesn't prove ownership of whatever service id was sent.
+    const {data, error} = await supabaseAdmin.from('services').update({name, description, category_id}).eq('id', id).eq('business_id', businessData.id).select().maybeSingle();
 
     if(error){
         throw new AppError(error.message, 500);
+    }
+
+    if(!data){
+        throw new AppError('Service not found', 404);
     }
 
     return res.status(200).json({ success: true, message: 'Service for business updated' });
@@ -293,12 +300,17 @@ router.post('/:slug/services', authMiddleware, validate(createServiceSchema), ca
 router.delete('/:slug/services/:id', authMiddleware, validate(serviceIdParamSchema), catchAsync(async (req, res) => {
     const { slug, id } = req.validated.params;
 
-    await verifyBusinessOwnership(slug, req.user.id);
+    const businessData = await verifyBusinessOwnership(slug, req.user.id);
 
-    const {data, error} = await supabaseAdmin.from('services').delete().eq('id', id);
+    // Same business_id scoping as the PUT above.
+    const {data, error} = await supabaseAdmin.from('services').delete().eq('id', id).eq('business_id', businessData.id).select().maybeSingle();
 
     if(error){
         throw new AppError(error.message, 500);
+    }
+
+    if(!data){
+        throw new AppError('Service not found', 404);
     }
 
     return res.status(200).json({ success: true, message: 'Service for business deleted' });
@@ -443,7 +455,7 @@ router.get('/:slug/owner/categories', authMiddleware, validate(businessSlugParam
 // The stored shape is validated entirely by updateBusinessHoursSchema; see
 // its comments for the day/time format. No GET /:slug/hours route exists
 // (or is needed) — `hours` rides along automatically in every route that
-// already does `select('*')` on businesses (GET /businesses, GET
+// already reads businesses (GET /businesses, GET
 // /businesses/:slug, GET /businesses/me).
 router.put('/:slug/hours', authMiddleware, validate(updateBusinessHoursSchema), catchAsync(async (req, res) => {
     const { slug } = req.validated.params;
@@ -1018,13 +1030,61 @@ router.post('/:slug/discounts/:id/redeem', authMiddleware, redeemLimiter, valida
         throw new AppError(redemptionError.message, 500);
     }
 
-    const { error: incrementError } = await supabaseAdmin
-        .from('discounts')
-        .update({ times_redeemed: discount.times_redeemed + 1 })
-        .eq('id', discount.id);
+    // Optimistic-lock increment: only bumps times_redeemed if nobody else has
+    // changed it since we read it, re-reading and retrying otherwise. A plain
+    // read-then-write let concurrent redeems overshoot max_redemptions. If the
+    // cap is hit on a re-read, this user's redemption row is removed again and
+    // they get the same 410 as a request that arrived after the cap.
+    let currentCount = discount.times_redeemed;
+    let incremented = false;
 
-    if (incrementError) {
-        throw new AppError(incrementError.message, 500);
+    for (let attempt = 0; attempt < 5 && !incremented; attempt++) {
+        if (discount.max_redemptions !== null && currentCount >= discount.max_redemptions) {
+            break;
+        }
+
+        const { data: updated, error: incrementError } = await supabaseAdmin
+            .from('discounts')
+            .update({ times_redeemed: currentCount + 1 })
+            .eq('id', discount.id)
+            .eq('times_redeemed', currentCount)
+            .select('id')
+            .maybeSingle();
+
+        if (incrementError) {
+            throw new AppError(incrementError.message, 500);
+        }
+
+        if (updated) {
+            incremented = true;
+            break;
+        }
+
+        const { data: fresh, error: freshError } = await supabaseAdmin
+            .from('discounts')
+            .select('times_redeemed')
+            .eq('id', discount.id)
+            .single();
+
+        if (freshError || !fresh) {
+            throw new AppError(freshError?.message ?? 'Discount not found', 500);
+        }
+
+        currentCount = fresh.times_redeemed;
+    }
+
+    if (!incremented) {
+        await supabaseAdmin
+            .from('discount_redemptions')
+            .delete()
+            .eq('discount_id', discount.id)
+            .eq('user_id', req.user.id);
+
+        if (discount.max_redemptions !== null && currentCount >= discount.max_redemptions) {
+            throw new AppError('This discount has reached its redemption limit', 410);
+        }
+
+        throw new AppError('Too many people are redeeming this discount right now — please try again', 409);
     }
 
     return res.status(200).json({ success: true, message: 'Discount redeemed', data: { code: discount.code } });

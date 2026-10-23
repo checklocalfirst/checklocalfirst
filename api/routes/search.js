@@ -4,6 +4,7 @@ import { catchAsync } from '../helpers/catchAsync.js';
 import { AppError } from '../helpers/AppError.js';
 import { parsePagination, buildPaginationMeta, paginateArray } from '../helpers/pagination.js';
 import { sortPremiumFirst } from '../helpers/sorting.js';
+import { PUBLIC_BUSINESS_COLUMNS } from '../helpers/publicColumns.js';
 
 const router = express.Router();
 
@@ -150,10 +151,16 @@ router.get('/', catchAsync(async (req, res) => {
             .from('categories')
             .select('id')
             .eq('slug', category)
-            .single();
+            .maybeSingle();
 
         if (categoryError) {
             throw new AppError(categoryError.message, 500);
+        }
+
+        // Unknown slug (stale link, typo, deleted category) — nothing can match,
+        // so return an empty result rather than letting .single() 500.
+        if (!categoryRow) {
+            return res.json({ success: true, data: [], pagination: buildPaginationMeta({ ...pagination, total: 0 }) });
         }
 
         const { data: taggedBusinesses, error: taggedError } = await supabase
@@ -245,7 +252,7 @@ router.get('/', catchAsync(async (req, res) => {
 
         let browseQuery = supabase
             .from('businesses')
-            .select('*, services(*)')
+            .select(`${PUBLIC_BUSINESS_COLUMNS}, services(*)`)
             .eq('status', 'approved');
 
         if (allowedIds !== null) {
@@ -278,7 +285,7 @@ router.get('/', catchAsync(async (req, res) => {
 
     let query = supabase
         .from('services')
-        .select('*, businesses!inner(*)')
+        .select(`*, businesses!inner(${PUBLIC_BUSINESS_COLUMNS})`)
         .textSearch('search_vector', formattedQuery)
         .eq('businesses.status', 'approved');
 
@@ -296,7 +303,7 @@ router.get('/', catchAsync(async (req, res) => {
     if (data.length === 0) {
         let fallbackQuery = supabase
             .from('services')
-            .select('*, businesses!inner(*)')
+            .select(`*, businesses!inner(${PUBLIC_BUSINESS_COLUMNS})`)
             .ilike('name', `%${searchQuery}%`)
             .eq('businesses.status', 'approved');
 
@@ -338,7 +345,7 @@ router.get('/', catchAsync(async (req, res) => {
         if (ids.length > 0) {
             let fuzzyBusinessQuery = supabase
                 .from('services')
-                .select('*, businesses!inner(*)')
+                .select(`*, businesses!inner(${PUBLIC_BUSINESS_COLUMNS})`)
                 .in('id', ids)
                 .eq('businesses.status', 'approved');
 
@@ -380,7 +387,7 @@ router.get('/', catchAsync(async (req, res) => {
     // than being widened to everything it offers.
     let businessQuery = supabase
         .from('businesses')
-        .select('*, services(*)')
+        .select(`${PUBLIC_BUSINESS_COLUMNS}, services(*)`)
         .textSearch('search_vector', formattedQuery)
         .eq('status', 'approved');
 
@@ -398,7 +405,7 @@ router.get('/', catchAsync(async (req, res) => {
     if (businessData.length === 0) {
         let businessFallbackQuery = supabase
             .from('businesses')
-            .select('*, services(*)')
+            .select(`${PUBLIC_BUSINESS_COLUMNS}, services(*)`)
             .ilike('name', `%${searchQuery}%`)
             .eq('status', 'approved');
 

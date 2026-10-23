@@ -229,7 +229,13 @@ router.post('/login', authLimiter, validate(loginSchema), catchAsync(async (req,
 
 router.post('/logout', authMiddleware, catchAsync(async (req, res) => {
 
-    const {error} = await supabase.auth.signOut();
+    // signOut() on the shared anon client never knew about the caller's session,
+    // so it revoked nothing. The admin API signs out the session behind this
+    // specific token (its refresh token stops working). The access token itself
+    // is a JWT and stays valid until it expires (~1 hour) — the frontend should
+    // still discard it on logout. 'local' = only this session, not every device
+    // (the library default is 'global').
+    const {error} = await supabaseAdmin.auth.admin.signOut(req.accessToken, 'local');
 
     if(error){
         throw new AppError(error.message, 500);
